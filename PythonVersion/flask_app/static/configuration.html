@@ -19,8 +19,9 @@
         <p class="muted small-print">Baud rate is fixed at 250000.</p>
         <div class="connection-scan-row">
           <label>COM/TTY Port
-            <input id="comPort" type="text" list="comPortList" placeholder="COM5 or /dev/ttyUSB0" autocomplete="off">
-            <datalist id="comPortList"></datalist>
+            <select id="comPort">
+              <option value="">Select a port and click Scan ports</option>
+            </select>
           </label>
           <button id="scanPortsBtn" type="button">Scan ports</button>
         </div>

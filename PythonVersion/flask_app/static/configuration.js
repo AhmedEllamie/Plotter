@@ -220,17 +220,40 @@ async function scanSerialPorts() {
   if (btn) btn.disabled = true;
   try {
     const data = await apiGet("/api/serial-ports");
-    const list = document.getElementById("comPortList");
-    list.innerHTML = "";
-    for (const p of data.ports || []) {
-      const opt = document.createElement("option");
-      opt.value = p.device;
-      const desc = [p.description, p.manufacturer].filter(Boolean).join(" — ");
-      opt.textContent = desc || p.device;
-      list.appendChild(opt);
+    const select = document.getElementById("comPort");
+    const previousValue = (select?.value || "").trim();
+    const ports = (data.ports || [])
+      .map((p) => String(p.device || "").trim())
+      .filter(Boolean);
+    const uniquePorts = Array.from(new Set(ports));
+
+    select.innerHTML = "";
+    const placeholderOption = document.createElement("option");
+    placeholderOption.value = "";
+    placeholderOption.textContent = uniquePorts.length ? "Select a detected port" : "No COM/USB serial ports detected";
+    select.appendChild(placeholderOption);
+
+    uniquePorts.forEach((device) => {
+      const option = document.createElement("option");
+      option.value = device;
+      option.textContent = device;
+      select.appendChild(option);
+    });
+
+    if (previousValue && uniquePorts.includes(previousValue)) {
+      select.value = previousValue;
+    } else if (uniquePorts.length === 1) {
+      select.value = uniquePorts[0];
+    } else if (uniquePorts.length > 1) {
+      const usb0 = uniquePorts.find((device) => /ttyUSB0$/i.test(device));
+      select.value = usb0 || uniquePorts[0];
+    } else {
+      select.value = "";
     }
-    const count = (data.ports || []).length;
-    showConfigMessage(count ? `Found ${count} serial port(s). Pick from suggestions or type a port.` : "No serial ports found.");
+
+    persistConnectionSettings();
+    const count = uniquePorts.length;
+    showConfigMessage(count ? `Found ${count} COM/USB serial port(s).` : "No COM/USB serial ports found.");
   } catch (error) {
     showConfigMessage(`Scan failed: ${error.message}`, true);
   } finally {
@@ -603,6 +626,7 @@ function initConfigurationPage() {
   registerPersistenceListeners();
   registerActions();
   showConfigMessage("Settings are saved automatically in this browser.");
+  void scanSerialPorts();
 }
 
 initConfigurationPage();

@@ -4,6 +4,8 @@ import asyncio
 import base64
 import io
 import json
+import re
+import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -576,14 +578,39 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         try:
             entries = []
+            is_windows = sys.platform.startswith("win")
+            is_linux = sys.platform.startswith("linux")
             for p in list_ports.comports():
+                device = (p.device or "").strip()
+                if not device:
+                    continue
+
+                # Keep UI selection strict:
+                # - Windows: COM ports only
+                # - Linux: USB serial adapters only (/dev/ttyUSB* or /dev/ttyACM*)
+                if is_windows and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
+                    continue
+                if is_linux:
+                    linux_match = re.fullmatch(r"(?:/dev/)?tty(?:USB|ACM)\d+", device, flags=re.IGNORECASE)
+                    if not linux_match:
+                        continue
+                    # Normalize to absolute /dev path for consistent UI and connect payloads.
+                    if not device.startswith("/dev/"):
+                        device = f"/dev/{device}"
+
+                if is_windows:
+                    # Normalize Windows device name casing.
+                    device = device.upper()
+
                 entries.append(
                     {
-                        "device": p.device,
+                        "device": device,
                         "description": (p.description or "").strip(),
                         "manufacturer": (p.manufacturer or "").strip(),
                     }
                 )
+
+            entries.sort(key=lambda x: x["device"])
         except Exception as ex:
             return api_error(
                 f"Failed to list serial ports: {ex}",
