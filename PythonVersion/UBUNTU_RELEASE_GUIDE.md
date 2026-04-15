@@ -118,3 +118,63 @@ source .venv/bin/activate
 pip install -r PythonVersion/requirements.txt
 sudo systemctl restart diwan-signature-flask
 ```
+
+## 9) Install fullscreen Pen Config kiosk app (Raspberry Pi)
+
+This app is a native fullscreen UI for:
+- status monitoring (including bulk status)
+- changing pen (`PenDown` / `PenUp`)
+- max pen distance input and distance reset
+
+### 9.1 Install both startup methods
+
+Use both methods for reliability:
+- `systemd --user` service
+- desktop autostart entry
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp PythonVersion/deploy/ubuntu/diwan-pen-kiosk.service ~/.config/systemd/user/diwan-pen-kiosk.service
+
+mkdir -p ~/.config/autostart
+cp PythonVersion/deploy/ubuntu/diwan-pen-kiosk.desktop ~/.config/autostart/diwan-pen-kiosk.desktop
+```
+
+### 9.2 Enable and start user service
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable diwan-pen-kiosk.service
+systemctl --user start diwan-pen-kiosk.service
+systemctl --user status diwan-pen-kiosk.service
+```
+
+To keep user services active even when no session is open (optional):
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+### 9.3 Verify startup on login
+
+1. Ensure Flask API service is running (`diwan-signature-flask` on port `5001`).
+2. Log out and log in again.
+3. Confirm kiosk app opens fullscreen automatically.
+4. Press `F11` to toggle fullscreen for debugging; `Esc` opens exit confirmation.
+
+### 9.4 Raspberry Pi HDMI / UX recommendations
+
+- Use a resolution that matches your small HDMI panel native mode.
+- Use system font scaling (if needed) so labels remain readable from operator distance.
+- Keep Ubuntu auto-login enabled for dedicated kiosk devices.
+- Avoid screen sleep/blanking in kiosk setup.
+
+### 9.5 Kiosk troubleshooting
+
+- Kiosk window does not open:
+  - `systemctl --user status diwan-pen-kiosk.service`
+  - `journalctl --user -u diwan-pen-kiosk.service -f`
+- API errors in kiosk feedback area:
+  - verify Flask service is reachable at `http://127.0.0.1:5001/api/health`
+- Opens but not fullscreen:
+  - use `F11` and check desktop environment fullscreen restrictions
