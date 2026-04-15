@@ -2,6 +2,7 @@ const state = {
   uploadedSvgName: null,
   capturePollHandle: null,
   statusPollHandle: null,
+  lastBulkCopies: 1,
 };
 
 function appendLog(message, isError = false) {
@@ -176,6 +177,29 @@ async function printUploadedSvg() {
   }
 }
 
+async function bulkPrintUploadedSvg() {
+  const rawInput = window.prompt("Enter number of copies (1-100):", String(state.lastBulkCopies || 1));
+  if (rawInput === null) {
+    return;
+  }
+
+  const copies = Number.parseInt(String(rawInput).trim(), 10);
+  if (!Number.isInteger(copies) || copies < 1 || copies > 100) {
+    appendLog("Bulk print error: copies must be an integer between 1 and 100.", true);
+    return;
+  }
+
+  state.lastBulkCopies = copies;
+  const payload = { copies, printRequest: buildPrintSettingsPayload() };
+  try {
+    const data = await apiPostJson("/api/print/bulk", payload);
+    appendLog(`Bulk print completed (${copies} copies). Commands per copy: ${data.commandCount}.`);
+    await refreshStatus();
+  } catch (error) {
+    appendLog(`Bulk print error: ${error.message}`, true);
+  }
+}
+
 async function runVoid() {
   try {
     await apiPostJson("/api/void");
@@ -303,6 +327,7 @@ async function requestCapture() {
 function registerEvents() {
   document.getElementById("captureBtn").addEventListener("click", requestCapture);
   document.getElementById("printBtn").addEventListener("click", printUploadedSvg);
+  document.getElementById("bulkPrintBtn").addEventListener("click", bulkPrintUploadedSvg);
   document.getElementById("captureFullscreenBtn").addEventListener("click", () => {
     void toggleCaptureFullscreen();
   });

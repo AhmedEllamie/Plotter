@@ -72,6 +72,7 @@ Open:
 
 Frontend notes:
 - Main page uses a visual status dashboard and main actions (`Capture`, `Print`, `Upload`, `Void`, `Status`).
+- Main page also supports `Bulk Print` with a copies prompt (1-100) using the same uploaded SVG workflow.
 - Connection and print settings are saved in browser localStorage and reused for printing.
 
 Flask APIs are available under `/api`, including:
@@ -80,6 +81,7 @@ Flask APIs are available under `/api`, including:
 - `GET /api/status`
 - `POST /api/upload`
 - `POST /api/print`
+- `POST /api/print/bulk`
 - `POST /api/void`
 - `POST /api/change-pen/start`
 - `POST /api/change-pen/finish`

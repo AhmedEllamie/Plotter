@@ -97,6 +97,24 @@ def _extract_print_payload() -> dict[str, Any]:
     return {}
 
 
+def _extract_bulk_copies() -> int:
+    json_payload = _get_json_dict()
+    raw_copies = (
+        json_payload.get("copies")
+        or request.form.get("copies")
+        or request.args.get("copies")
+    )
+    if raw_copies is None or raw_copies == "":
+        raise ValueError("copies is required.")
+    try:
+        copies = int(str(raw_copies))
+    except (TypeError, ValueError) as ex:
+        raise ValueError("copies must be an integer.") from ex
+    if copies < 1 or copies > 100:
+        raise ValueError("copies must be between 1 and 100.")
+    return copies
+
+
 def _convert_svg(svg_payload: bytes, print_request: PrintRequest) -> list[str]:
     if not svg_payload:
         raise ValueError("SVG payload is empty.")
@@ -732,6 +750,55 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Print completed.",
             data={
                 "svgFileName": svg_file_name,
+                "commandCount": len(gcode),
+                "result": asdict(print_result),
+                "status": asdict(provider.printer_service.get_status()),
+            },
+        )
+
+    @app.post("/api/print/bulk")
+    def bulk_print_svg() -> tuple[Response, int]:
+        try:
+            _ensure_connected(provider)
+            _ensure_not_busy(provider)
+        except RuntimeError as ex:
+            return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
+
+        upload = request.files.get("svg")
+        if upload is not None:
+            svg_payload = upload.read()
+            svg_file_name = upload.filename or "uploaded.svg"
+            if not svg_payload:
+                return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
+            runtime_state.set_uploaded_svg(svg_file_name, svg_payload)
+        else:
+            uploaded = runtime_state.get_uploaded_svg()
+            if uploaded is None:
+                return api_error(
+                    "No uploaded SVG found. Call POST /api/upload first.",
+                    error_code="SVG_NOT_UPLOADED",
+                    status_code=400,
+                )
+            svg_payload = uploaded.content
+            svg_file_name = uploaded.file_name
+
+        try:
+            copies = _extract_bulk_copies()
+            print_request = _build_print_request(_extract_print_payload())
+            gcode = _convert_svg(svg_payload, print_request)
+            print_result = _run_async(provider.printer_service.bulk_print(gcode, copies))
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
+        except RuntimeError as ex:
+            return api_error(str(ex), error_code="PRINT_RUNTIME_ERROR", status_code=400)
+        except Exception as ex:
+            return api_error(f"Bulk print failed: {ex}", error_code="BULK_PRINT_FAILED", status_code=500)
+
+        return api_success(
+            message="Bulk print completed.",
+            data={
+                "svgFileName": svg_file_name,
+                "copies": copies,
                 "commandCount": len(gcode),
                 "result": asdict(print_result),
                 "status": asdict(provider.printer_service.get_status()),
