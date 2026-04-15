@@ -3,6 +3,10 @@ const state = {
   capturePollHandle: null,
   statusPollHandle: null,
   lastBulkCopies: 1,
+  bulkRunning: false,
+  bulkStopRequested: false,
+  bulkRequestedTotal: 0,
+  bulkPrintedCount: 0,
 };
 
 function appendLog(message, isError = false) {
@@ -59,6 +63,33 @@ function buildCapturePayload() {
     manual_focus_value: Number(capture.manualFocusValue || 35),
     quad_points: parseQuadPoints(capture.quadPoints),
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function updateBulkProgressLabel() {
+  const node = document.getElementById("bulkProgressLabel");
+  if (!node) return;
+  node.textContent = `Bulk progress: ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}`;
+}
+
+function updateBulkUiState() {
+  const stopButton = document.getElementById("stopBulkBtn");
+  const bulkButton = document.getElementById("bulkPrintBtn");
+  const printButton = document.getElementById("printBtn");
+  if (stopButton) {
+    stopButton.disabled = !state.bulkRunning;
+  }
+  if (bulkButton) {
+    bulkButton.disabled = state.bulkRunning;
+  }
+  if (printButton) {
+    printButton.disabled = state.bulkRunning;
+  }
 }
 
 function setBadgeState(elementId, text, className) {
@@ -178,6 +209,11 @@ async function printUploadedSvg() {
 }
 
 async function bulkPrintUploadedSvg() {
+  if (state.bulkRunning) {
+    appendLog("Bulk print is already running.", true);
+    return;
+  }
+
   const rawInput = window.prompt("Enter number of copies (1-100):", String(state.lastBulkCopies || 1));
   if (rawInput === null) {
     return;
@@ -190,14 +226,70 @@ async function bulkPrintUploadedSvg() {
   }
 
   state.lastBulkCopies = copies;
-  const payload = { copies, printRequest: buildPrintSettingsPayload() };
+  state.bulkRunning = true;
+  state.bulkStopRequested = false;
+  state.bulkRequestedTotal = copies;
+  state.bulkPrintedCount = 0;
+  updateBulkProgressLabel();
+  updateBulkUiState();
+
   try {
-    const data = await apiPostJson("/api/print/bulk", payload);
-    appendLog(`Bulk print completed (${copies} copies). Commands per copy: ${data.commandCount}.`);
+    appendLog(`Bulk print started (${copies} copies).`);
+    for (let index = 0; index < copies; index += 1) {
+      if (state.bulkStopRequested) {
+        appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
+        break;
+      }
+
+      appendLog(`Bulk ${index + 1}/${copies}: capturing photo...`);
+      await requestCaptureAndThrow();
+
+      if (state.bulkStopRequested) {
+        appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
+        break;
+      }
+
+      appendLog(`Bulk ${index + 1}/${copies}: waiting 2 seconds before print...`);
+      await sleep(2000);
+
+      if (state.bulkStopRequested) {
+        appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
+        break;
+      }
+
+      const payload = { printRequest: buildPrintSettingsPayload() };
+      await apiPostJson("/api/print", payload);
+      state.bulkPrintedCount = index + 1;
+      updateBulkProgressLabel();
+      appendLog(`Bulk ${state.bulkPrintedCount}/${state.bulkRequestedTotal}: printed.`);
+    }
+
+    if (!state.bulkStopRequested && state.bulkPrintedCount === state.bulkRequestedTotal) {
+      appendLog(`Bulk print completed (${state.bulkPrintedCount} / ${state.bulkRequestedTotal}).`);
+    }
     await refreshStatus();
   } catch (error) {
     appendLog(`Bulk print error: ${error.message}`, true);
+  } finally {
+    state.bulkRunning = false;
+    state.bulkStopRequested = false;
+    updateBulkUiState();
   }
+}
+
+async function stopBulkPrint() {
+  if (!state.bulkRunning) {
+    appendLog("No bulk print is currently running.", true);
+    return;
+  }
+  state.bulkStopRequested = true;
+  try {
+    await apiPostJson("/api/print/bulk/stop");
+  } catch (error) {
+    // Frontend bulk flow can still stop at the next loop boundary.
+    appendLog(`Stop request warning: ${error.message}`, true);
+  }
+  appendLog("Stop bulk requested.");
 }
 
 async function runVoid() {
@@ -283,41 +375,43 @@ async function toggleCaptureFullscreen() {
   }
 }
 
+async function requestCaptureAndThrow() {
+  const startData = await apiPostJson("/api/scanner/capture/start", {
+    readability_required: true,
+    timeout_seconds: 15,
+  });
+  const captureId = String(startData.captureId || startData.capture?.capture_id || startData.capture?.job_id || "").trim();
+  if (!captureId) {
+    throw new Error("Capture id was not returned.");
+  }
+
+  const maxAttempts = 50;
+  let latestStatus = "";
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const statusData = await apiGet(`/api/scanner/capture/${encodeURIComponent(captureId)}/status`);
+    latestStatus = String(statusData.capture?.status || "").toLowerCase();
+    if (latestStatus === "succeeded") {
+      break;
+    }
+    if (latestStatus === "failed") {
+      const capture = statusData.capture || {};
+      throw new Error(`Capture failed: ${capture.error || "unknown_error"} - ${capture.detail || "no detail"}`);
+    }
+    await sleep(400);
+  }
+  if (latestStatus !== "succeeded") {
+    throw new Error("Capture status polling timed out.");
+  }
+
+  const imageUrl = `/api/scanner/capture/${encodeURIComponent(captureId)}/result`;
+  const imageEl = document.getElementById("capturePreview");
+  imageEl.src = `${imageUrl}?t=${Date.now()}`;
+  imageEl.style.display = "block";
+}
+
 async function requestCapture() {
   try {
-    const startData = await apiPostJson("/api/scanner/capture/start", {
-      readability_required: true,
-      timeout_seconds: 15,
-    });
-    const captureId = String(startData.captureId || startData.capture?.capture_id || startData.capture?.job_id || "").trim();
-    if (!captureId) {
-      throw new Error("Capture id was not returned.");
-    }
-
-    const maxAttempts = 50;
-    let latestStatus = "";
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      const statusData = await apiGet(`/api/scanner/capture/${encodeURIComponent(captureId)}/status`);
-      latestStatus = String(statusData.capture?.status || "").toLowerCase();
-      if (latestStatus === "succeeded") {
-        break;
-      }
-      if (latestStatus === "failed") {
-        const capture = statusData.capture || {};
-        throw new Error(`Capture failed: ${capture.error || "unknown_error"} - ${capture.detail || "no detail"}`);
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 400);
-      });
-    }
-    if (latestStatus !== "succeeded") {
-      throw new Error("Capture status polling timed out.");
-    }
-
-    const imageUrl = `/api/scanner/capture/${encodeURIComponent(captureId)}/result`;
-    const imageEl = document.getElementById("capturePreview");
-    imageEl.src = `${imageUrl}?t=${Date.now()}`;
-    imageEl.style.display = "block";
+    await requestCaptureAndThrow();
     appendLog("Capture completed and rectified image loaded.");
   } catch (error) {
     appendLog(`Capture request error: ${error.message}`, true);
@@ -328,6 +422,7 @@ function registerEvents() {
   document.getElementById("captureBtn").addEventListener("click", requestCapture);
   document.getElementById("printBtn").addEventListener("click", printUploadedSvg);
   document.getElementById("bulkPrintBtn").addEventListener("click", bulkPrintUploadedSvg);
+  document.getElementById("stopBulkBtn").addEventListener("click", stopBulkPrint);
   document.getElementById("captureFullscreenBtn").addEventListener("click", () => {
     void toggleCaptureFullscreen();
   });
@@ -348,6 +443,8 @@ function registerEvents() {
 async function initPage() {
   registerEvents();
   updateCaptureFullscreenButtonLabel();
+  updateBulkProgressLabel();
+  updateBulkUiState();
   await refreshStatus();
   startAutoStatusRefresh();
   try {

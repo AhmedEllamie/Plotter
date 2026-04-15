@@ -135,6 +135,9 @@ class PrinterStatus:
     is_open: bool = False
     port_name: str = "N/A"
     is_printing: bool = False
+    bulk_requested_total: int = 0
+    bulk_printed_count: int = 0
+    bulk_stop_requested: bool = False
     current_svg_total_distance_mm: float = 0.0
     current_executed_distance_mm: float = 0.0
     current_execution_percent: float = 0.0

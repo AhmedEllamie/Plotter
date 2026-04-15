@@ -831,8 +831,31 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 "copies": copies,
                 "commandCount": len(gcode),
                 "result": asdict(print_result),
+                "bulkProgress": {
+                    "requestedTotal": copies,
+                    "printedCount": int(print_result.copies or 0),
+                    "stopRequested": bool(provider.printer_service.get_status().bulk_stop_requested),
+                },
                 "status": asdict(provider.printer_service.get_status()),
             },
+        )
+
+    @app.post("/api/print/bulk/stop")
+    def stop_bulk_print() -> tuple[Response, int]:
+        try:
+            _ensure_connected(provider)
+            stop_requested = provider.printer_service.stop_bulk_print()
+        except RuntimeError as ex:
+            return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
+        except Exception as ex:
+            return api_error(f"Failed to stop bulk print: {ex}", error_code="BULK_STOP_FAILED", status_code=500)
+
+        if not stop_requested:
+            return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
+
+        return api_success(
+            message="Bulk stop requested.",
+            data={"status": asdict(provider.printer_service.get_status())},
         )
 
     @app.post("/api/void")

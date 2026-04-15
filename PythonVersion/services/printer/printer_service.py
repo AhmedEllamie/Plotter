@@ -30,6 +30,9 @@ class PrinterService(IPrinterService):
         self._cumulative_distance_mm, self._max_pen_distance_m = self._load_distance_settings()
         self._current_svg_total_distance_mm = 0.0
         self._current_executed_distance_mm = 0.0
+        self._stop_requested = threading.Event()
+        self._bulk_requested_total = 0
+        self._bulk_printed_count = 0
 
     _COMMAND_VALUE_PATTERN = re.compile(r"([A-Za-z])\s*(-?\d+(?:\.\d+)?)")
 
@@ -97,6 +100,9 @@ class PrinterService(IPrinterService):
             is_open=self.is_open,
             port_name=self.port_name,
             is_printing=self.is_printing,
+            bulk_requested_total=self._bulk_requested_total,
+            bulk_printed_count=self._bulk_printed_count,
+            bulk_stop_requested=self._stop_requested.is_set(),
             current_svg_total_distance_mm=round(self._current_svg_total_distance_mm, 3),
             current_executed_distance_mm=round(self._current_executed_distance_mm, 3),
             current_execution_percent=current_percent,
@@ -130,20 +136,27 @@ class PrinterService(IPrinterService):
         total_commands = 0
         total_executed_distance = 0.0
         svg_total_distance = self.calculate_svg_distance_mm(gcode)
+        self._bulk_requested_total = copies
+        self._bulk_printed_count = 0
         try:
             def run() -> None:
                 nonlocal total_commands, total_executed_distance
                 for _ in range(copies):
+                    if self._stop_requested.is_set():
+                        break
                     result = self._execute_print_cycle(gcode)
                     total_commands += result["commands_sent"]
                     total_executed_distance += result["executed_distance_mm"]
+                    self._bulk_printed_count += 1
 
             await asyncio.to_thread(run)
             self._add_to_cumulative_distance(total_executed_distance)
-            total_svg_distance = svg_total_distance * copies
+            printed_copies = self._bulk_printed_count
+            total_svg_distance = svg_total_distance * printed_copies
+            stopped = self._stop_requested.is_set() and printed_copies < copies
             return PrintResponse(
-                message="Bulk print complete.",
-                copies=copies,
+                message="Bulk print stopped by user." if stopped else "Bulk print complete.",
+                copies=printed_copies,
                 total_commands_sent=total_commands,
                 svg_total_distance_mm=round(total_svg_distance, 3),
                 executed_distance_mm=round(total_executed_distance, 3),
@@ -163,6 +176,13 @@ class PrinterService(IPrinterService):
             )
         finally:
             self._end_print_job()
+
+    def stop_bulk_print(self) -> bool:
+        with self._print_lock:
+            if not self._is_printing:
+                return False
+            self._stop_requested.set()
+            return True
 
     async def pen_change_start(self) -> PrintResponse:
         self._begin_print_job()
@@ -214,6 +234,7 @@ class PrinterService(IPrinterService):
             print(f"Sending {len(gcode)} G-code commands...")
             sent_count = 0
             for line in gcode:
+                self._throw_if_stop_requested()
                 cmd = line.strip()
                 if not cmd or cmd.startswith(";"):
                     continue
@@ -314,6 +335,7 @@ class PrinterService(IPrinterService):
         buffer = ""
 
         while True:
+            self._throw_if_stop_requested()
             if time.time() - start > timeout_seconds:
                 # Keep parity with C# behavior: timeout does not fail the job.
                 return
@@ -335,6 +357,7 @@ class PrinterService(IPrinterService):
         expected_lower = expected.lower()
 
         while True:
+            self._throw_if_stop_requested()
             if time.time() - start > timeout_seconds:
                 raise TimeoutError(f"Timeout waiting for '{expected}'.")
 
@@ -406,8 +429,15 @@ class PrinterService(IPrinterService):
             if self._is_printing:
                 raise RuntimeError("Printer is busy.")
             self._is_printing = True
+            self._stop_requested.clear()
+            self._bulk_requested_total = 0
+            self._bulk_printed_count = 0
             self._current_svg_total_distance_mm = 0.0
             self._current_executed_distance_mm = 0.0
+
+    def _throw_if_stop_requested(self) -> None:
+        if self._stop_requested.is_set():
+            raise RuntimeError("Bulk print stop requested by user.")
 
     def _distance_delta_for_command(self, command: str, state: dict[str, float | bool]) -> float:
         parsed = self._parse_command_values(command)

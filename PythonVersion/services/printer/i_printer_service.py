@@ -52,6 +52,10 @@ class IPrinterService(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def stop_bulk_print(self) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
     async def void_print(self) -> PrintResponse:
         raise NotImplementedError
 
