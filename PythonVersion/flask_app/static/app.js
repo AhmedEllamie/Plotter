@@ -249,8 +249,8 @@ async function bulkPrintUploadedSvg() {
         break;
       }
 
-      appendLog(`Bulk ${index + 1}/${copies}: waiting 2 seconds before print...`);
-      await sleep(2000);
+      appendLog(`Bulk ${index + 1}/${copies}: waiting 5 seconds before print...`);
+      await sleep(5000);
 
       if (state.bulkStopRequested) {
         appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
