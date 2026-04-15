@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -637,6 +638,35 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             )
 
         return api_success(message="Serial ports listed.", data={"ports": entries})
+
+    @app.get("/api/serial-port-check")
+    def serial_port_check() -> tuple[Response, int]:
+        device = str(request.args.get("device", "")).strip()
+        if not device:
+            return api_error("device is required.", error_code="SERIAL_DEVICE_REQUIRED", status_code=400)
+        if not device.startswith("/dev/") and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
+            return api_error("Invalid serial device path.", error_code="SERIAL_DEVICE_INVALID", status_code=400)
+
+        exists = os.path.exists(device)
+        readable = os.access(device, os.R_OK) if exists else False
+        writable = os.access(device, os.W_OK) if exists else False
+        resolved_target = ""
+        if exists:
+            try:
+                resolved_target = os.path.realpath(device)
+            except Exception:
+                resolved_target = ""
+
+        return api_success(
+            message="Serial device check complete.",
+            data={
+                "device": device,
+                "exists": bool(exists),
+                "readable": bool(readable),
+                "writable": bool(writable),
+                "resolvedTarget": resolved_target,
+            },
+        )
 
     @app.post("/api/connect")
     def connect() -> tuple[Response, int]:

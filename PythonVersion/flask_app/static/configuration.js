@@ -1,4 +1,5 @@
 const FIXED_BAUD_RATE = 250000;
+const DEFAULT_STABLE_TTY_PORT = "/dev/printer_serial";
 const MAX_FOCUS_VALUE = 255;
 const MIN_FOCUS_VALUE = 0;
 const FOCUS_STEP = 5;
@@ -172,7 +173,15 @@ function updateStreamPreviewLayout() {
 
 function hydrateConfiguration() {
   const connection = loadConnectionSettings();
-  document.getElementById("comPort").value = connection.comPort || "";
+  const comPortInput = document.getElementById("comPort");
+  const savedPort = String(connection.comPort || "").trim();
+  if (savedPort) {
+    comPortInput.value = savedPort;
+  } else if (window.location.protocol !== "file:") {
+    comPortInput.value = DEFAULT_STABLE_TTY_PORT;
+  } else {
+    comPortInput.value = "";
+  }
 
   const print = loadPrintSettings();
   document.getElementById("width").value = print.width || "210mm";
@@ -203,6 +212,13 @@ function hydrateConfiguration() {
   renderQuadPoints();
 }
 
+function setTtyPortStatus(message, isError = false) {
+  const node = document.getElementById("ttyPortStatus");
+  if (!node) return;
+  node.textContent = message;
+  node.className = isError ? "small-print message-error" : "small-print message-ok";
+}
+
 function persistConnectionSettings() {
   saveConnectionSettings(readConnectionForm());
 }
@@ -220,44 +236,68 @@ async function scanSerialPorts() {
   if (btn) btn.disabled = true;
   try {
     const data = await apiGet("/api/serial-ports");
-    const select = document.getElementById("comPort");
-    const previousValue = (select?.value || "").trim();
+    const input = document.getElementById("comPort");
+    const datalist = document.getElementById("serialPortsList");
+    const previousValue = (input?.value || "").trim();
     const ports = (data.ports || [])
       .map((p) => String(p.device || "").trim())
       .filter(Boolean);
     const uniquePorts = Array.from(new Set(ports));
 
-    select.innerHTML = "";
-    const placeholderOption = document.createElement("option");
-    placeholderOption.value = "";
-    placeholderOption.textContent = uniquePorts.length ? "Select a detected port" : "No COM/USB serial ports detected";
-    select.appendChild(placeholderOption);
+    datalist.innerHTML = "";
 
     uniquePorts.forEach((device) => {
       const option = document.createElement("option");
       option.value = device;
-      option.textContent = device;
-      select.appendChild(option);
+      datalist.appendChild(option);
     });
 
-    if (previousValue && uniquePorts.includes(previousValue)) {
-      select.value = previousValue;
+    if (previousValue) {
+      input.value = previousValue;
+    } else if (window.location.protocol !== "file:") {
+      input.value = DEFAULT_STABLE_TTY_PORT;
     } else if (uniquePorts.length === 1) {
-      select.value = uniquePorts[0];
+      input.value = uniquePorts[0];
     } else if (uniquePorts.length > 1) {
       const usb0 = uniquePorts.find((device) => /ttyUSB0$/i.test(device));
-      select.value = usb0 || uniquePorts[0];
-    } else {
-      select.value = "";
+      input.value = usb0 || uniquePorts[0];
     }
 
     persistConnectionSettings();
     const count = uniquePorts.length;
     showConfigMessage(count ? `Found ${count} COM/USB serial port(s).` : "No COM/USB serial ports found.");
+    await refreshTtyPortStatus();
   } catch (error) {
     showConfigMessage(`Scan failed: ${error.message}`, true);
+    setTtyPortStatus("Port status: check failed.", true);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+async function refreshTtyPortStatus() {
+  const comPort = document.getElementById("comPort").value.trim();
+  if (!comPort) {
+    setTtyPortStatus("Port status: empty.");
+    return;
+  }
+  try {
+    const data = await apiGet(`/api/serial-port-check?device=${encodeURIComponent(comPort)}`);
+    const isReady = Boolean(data.exists) && Boolean(data.readable) && Boolean(data.writable);
+    const flags = [
+      data.exists ? "exists" : "missing",
+      data.readable ? "readable" : "not-readable",
+      data.writable ? "writable" : "not-writable",
+    ].join(", ");
+    const resolved = data.resolvedTarget && data.resolvedTarget !== comPort
+      ? ` -> ${data.resolvedTarget}`
+      : "";
+    setTtyPortStatus(
+      `Port status: ${isReady ? "ready" : "unavailable"} (${flags})${resolved}`,
+      !isReady
+    );
+  } catch (error) {
+    setTtyPortStatus(`Port status: check error (${error.message}).`, true);
   }
 }
 
@@ -271,8 +311,10 @@ async function connectPrinter() {
     await apiPostJson("/api/connect", payload);
     persistConnectionSettings();
     showConfigMessage("Printer connected.");
+    await refreshTtyPortStatus();
   } catch (error) {
     showConfigMessage(`Connect error: ${error.message}`, true);
+    await refreshTtyPortStatus();
   }
 }
 
@@ -280,8 +322,10 @@ async function disconnectPrinter() {
   try {
     await apiPostJson("/api/disconnect");
     showConfigMessage("Printer disconnected.");
+    await refreshTtyPortStatus();
   } catch (error) {
     showConfigMessage(`Disconnect error: ${error.message}`, true);
+    await refreshTtyPortStatus();
   }
 }
 
@@ -462,8 +506,14 @@ function registerPersistenceListeners() {
 
   connectionFields.forEach((id) => {
     const node = document.getElementById(id);
-    node.addEventListener("input", persistConnectionSettings);
-    node.addEventListener("change", persistConnectionSettings);
+    node.addEventListener("input", () => {
+      persistConnectionSettings();
+      void refreshTtyPortStatus();
+    });
+    node.addEventListener("change", () => {
+      persistConnectionSettings();
+      void refreshTtyPortStatus();
+    });
   });
 
   printFields.forEach((id) => {
@@ -627,6 +677,7 @@ function initConfigurationPage() {
   registerActions();
   showConfigMessage("Settings are saved automatically in this browser.");
   void scanSerialPorts();
+  void refreshTtyPortStatus();
 }
 
 initConfigurationPage();
