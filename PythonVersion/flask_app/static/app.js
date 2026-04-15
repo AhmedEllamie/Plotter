@@ -18,6 +18,10 @@ function appendLog(message, isError = false) {
   logBox.prepend(line);
 }
 
+function formatTimestamp(dateValue = new Date()) {
+  return dateValue.toLocaleString();
+}
+
 function clampPercent(value) {
   const asNumber = Number(value);
   if (!Number.isFinite(asNumber)) return 0;
@@ -200,8 +204,14 @@ async function uploadSvgFromFile(file) {
 async function printUploadedSvg() {
   const payload = { printRequest: buildPrintSettingsPayload() };
   try {
+    const startedAt = new Date();
+    appendLog(`Print started at ${formatTimestamp(startedAt)}.`);
     const data = await apiPostJson("/api/print", payload);
-    appendLog(`Print completed. Commands sent: ${data.result.commands_sent}.`);
+    const completedAt = new Date();
+    const svgName = data.svgFileName || state.uploadedSvgName || "unknown.svg";
+    appendLog(
+      `Print completed at ${formatTimestamp(completedAt)} | SVG: ${svgName} | Commands: ${data.result.commands_sent}.`
+    );
     await refreshStatus();
   } catch (error) {
     appendLog(`Print error: ${error.message}`, true);
@@ -258,10 +268,16 @@ async function bulkPrintUploadedSvg() {
       }
 
       const payload = { printRequest: buildPrintSettingsPayload() };
-      await apiPostJson("/api/print", payload);
+      const printStartedAt = new Date();
+      appendLog(`Bulk ${index + 1}/${copies}: print started at ${formatTimestamp(printStartedAt)}.`);
+      const printData = await apiPostJson("/api/print", payload);
       state.bulkPrintedCount = index + 1;
       updateBulkProgressLabel();
-      appendLog(`Bulk ${state.bulkPrintedCount}/${state.bulkRequestedTotal}: printed.`);
+      const printCompletedAt = new Date();
+      const bulkSvgName = printData.svgFileName || state.uploadedSvgName || "unknown.svg";
+      appendLog(
+        `Bulk ${state.bulkPrintedCount}/${state.bulkRequestedTotal}: printed at ${formatTimestamp(printCompletedAt)} | SVG: ${bulkSvgName}.`
+      );
     }
 
     if (!state.bulkStopRequested && state.bulkPrintedCount === state.bulkRequestedTotal) {

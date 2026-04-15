@@ -15,12 +15,25 @@ const uiState = {
   focusSyncQueued: false,
   lastAppliedQuadPointsPx: null,
 };
+const MAX_CONFIG_LOG_LINES = 100;
 
 function showConfigMessage(message, isError = false) {
   const node = document.getElementById("configMessage");
   if (!node) return;
   node.textContent = message;
   node.className = isError ? "message-error" : "message-ok";
+}
+
+function appendConfigLog(message, isError = false) {
+  const logBox = document.getElementById("configLogBox");
+  if (!logBox) return;
+  const line = document.createElement("div");
+  line.className = `log-line${isError ? " error" : ""}`;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+  logBox.prepend(line);
+  while (logBox.childElementCount > MAX_CONFIG_LOG_LINES) {
+    logBox.removeChild(logBox.lastElementChild);
+  }
 }
 
 function readConnectionForm() {
@@ -234,6 +247,7 @@ function persistCaptureSettings() {
 async function scanSerialPorts() {
   const btn = document.getElementById("scanPortsBtn");
   if (btn) btn.disabled = true;
+  appendConfigLog("Scanning serial ports...");
   try {
     const data = await apiGet("/api/serial-ports");
     const input = document.getElementById("comPort");
@@ -266,9 +280,11 @@ async function scanSerialPorts() {
     persistConnectionSettings();
     const count = uniquePorts.length;
     showConfigMessage(count ? `Found ${count} COM/USB serial port(s).` : "No COM/USB serial ports found.");
+    appendConfigLog(count ? `Scan completed: found ${count} COM/USB serial port(s).` : "Scan completed: no COM/USB serial ports found.");
     await refreshTtyPortStatus();
   } catch (error) {
     showConfigMessage(`Scan failed: ${error.message}`, true);
+    appendConfigLog(`Scan failed: ${error.message}`, true);
     setTtyPortStatus("Port status: check failed.", true);
   } finally {
     if (btn) btn.disabled = false;
@@ -307,45 +323,57 @@ async function connectPrinter() {
   if (comPort) {
     payload.comPort = comPort;
   }
+  appendConfigLog(`Connecting printer${comPort ? ` on ${comPort}` : ""}...`);
   try {
     await apiPostJson("/api/connect", payload);
     persistConnectionSettings();
     showConfigMessage("Printer connected.");
+    appendConfigLog("Printer connected.");
     await refreshTtyPortStatus();
   } catch (error) {
     showConfigMessage(`Connect error: ${error.message}`, true);
+    appendConfigLog(`Connect failed: ${error.message}`, true);
     await refreshTtyPortStatus();
   }
 }
 
 async function disconnectPrinter() {
+  appendConfigLog("Disconnecting printer...");
   try {
     await apiPostJson("/api/disconnect");
     showConfigMessage("Printer disconnected.");
+    appendConfigLog("Printer disconnected.");
     await refreshTtyPortStatus();
   } catch (error) {
     showConfigMessage(`Disconnect error: ${error.message}`, true);
+    appendConfigLog(`Disconnect failed: ${error.message}`, true);
     await refreshTtyPortStatus();
   }
 }
 
 async function runChangePen() {
   const mode = document.getElementById("penMode").value || "start";
+  appendConfigLog(`Running ChangePen (${mode})...`);
   try {
     await apiPostJson(`/api/change-pen/${mode}`);
     persistPrintSettings();
     showConfigMessage(`ChangePen ${mode} completed.`);
+    appendConfigLog(`ChangePen ${mode} completed.`);
   } catch (error) {
     showConfigMessage(`ChangePen error: ${error.message}`, true);
+    appendConfigLog(`ChangePen ${mode} failed: ${error.message}`, true);
   }
 }
 
 async function runReset() {
+  appendConfigLog("Resetting distance stats...");
   try {
     await apiPostJson("/api/reset", { clearUploadedSvg: false });
     showConfigMessage("Distance reset completed.");
+    appendConfigLog("Distance reset completed.");
   } catch (error) {
     showConfigMessage(`Reset error: ${error.message}`, true);
+    appendConfigLog(`Distance reset failed: ${error.message}`, true);
   }
 }
 
@@ -353,14 +381,18 @@ async function setPenMaxDistance() {
   const rawValue = document.getElementById("penMaxDistanceM").value.trim();
   if (!rawValue) {
     showConfigMessage("Enter pen max distance in meters first.", true);
+    appendConfigLog("Set pen max distance blocked: value is empty.", true);
     return;
   }
+  appendConfigLog(`Updating pen max distance to ${rawValue}m...`);
   try {
     await apiPostJson("/api/pen-max-distance", { meters: Number(rawValue) });
     persistPrintSettings();
     showConfigMessage("Pen max distance updated.");
+    appendConfigLog(`Pen max distance updated to ${rawValue}m.`);
   } catch (error) {
     showConfigMessage(`Set pen max distance error: ${error.message}`, true);
+    appendConfigLog(`Set pen max distance failed: ${error.message}`, true);
   }
 }
 
@@ -470,11 +502,14 @@ async function flushManualFocusSync() {
   uiState.focusSyncQueued = false;
   const focusValue = Number(document.getElementById("manualFocusValue").value || 35);
   const autofocusMode = isAutofocusEnabled() ? "enabled" : "disabled";
+  appendConfigLog(`Syncing focus config (autofocus ${autofocusMode}, manual ${focusValue})...`);
   try {
     await applyScannerManualConfig({ requireQuadPoints: false });
     showConfigMessage(`Focus config sent (autofocus ${autofocusMode}, manual ${focusValue}).`);
+    appendConfigLog(`Focus config synced (autofocus ${autofocusMode}, manual ${focusValue}).`);
   } catch (error) {
     showConfigMessage(`Focus config sync failed: ${error.message}`, true);
+    appendConfigLog(`Focus config sync failed: ${error.message}`, true);
   } finally {
     uiState.focusSyncInFlight = false;
     if (uiState.focusSyncQueued) {
@@ -544,6 +579,7 @@ function showStreamInline() {
   img.src = `${url}&t=${Date.now()}`;
   uiState.streamVisible = true;
   showConfigMessage("Live stream started.");
+  appendConfigLog("Live stream started.");
 }
 
 function stopStreamInline() {
@@ -551,12 +587,14 @@ function stopStreamInline() {
   img.src = "";
   uiState.streamVisible = false;
   showConfigMessage("Live stream stopped.");
+  appendConfigLog("Live stream stopped.");
 }
 
 function clearQuadPoints() {
   uiState.quadPoints = [];
   renderQuadPoints();
   persistCaptureSettings();
+  appendConfigLog("Quad points cleared.");
 }
 
 function adjustManualFocus(delta) {
@@ -615,11 +653,14 @@ function addQuadPointFromClick(event) {
 }
 
 async function sendScannerConfig() {
+  appendConfigLog("Sending scanner config...");
   try {
     const { payload } = await applyScannerManualConfig({ requireQuadPoints: true });
     showConfigMessage(`Scanner config sent successfully.\nPayload:\n${JSON.stringify(payload, null, 2)}`);
+    appendConfigLog("Scanner config sent successfully.");
   } catch (error) {
     showConfigMessage(`Send scanner config failed: ${error.message}`, true);
+    appendConfigLog(`Scanner config failed: ${error.message}`, true);
   }
 }
 
@@ -656,12 +697,15 @@ function registerActions() {
       renderFocusMode();
       const mode = isAutofocusEnabled() ? "enabled" : "disabled";
       showConfigMessage(`Autofocus ${mode} selected. Sending to scanner...`);
+      appendConfigLog(`Autofocus ${mode} selected. Sending update...`);
       void applyScannerManualConfig({ requireQuadPoints: false })
         .then(() => {
           showConfigMessage(`Autofocus ${mode} sent.`);
+          appendConfigLog(`Autofocus ${mode} sent.`);
         })
         .catch((error) => {
           showConfigMessage(`Autofocus update failed: ${error.message}`, true);
+          appendConfigLog(`Autofocus update failed: ${error.message}`, true);
         });
     });
   });
@@ -676,6 +720,7 @@ function initConfigurationPage() {
   registerPersistenceListeners();
   registerActions();
   showConfigMessage("Settings are saved automatically in this browser.");
+  appendConfigLog("Configuration page initialized.");
   void scanSerialPorts();
   void refreshTtyPortStatus();
 }
