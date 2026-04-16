@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime
-from tkinter import BOTH, END, LEFT, RIGHT, TOP, X, Button, Entry, Frame, Label, StringVar, Text, Tk, messagebox
+from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -15,7 +14,6 @@ class PenKioskApp:
         self._root.title("Diwan Pen Config Kiosk")
         self._root.configure(bg="#0f172a")
         self._root.attributes("-fullscreen", True)
-        self._root.bind("<Escape>", self._on_escape)
         self._root.bind("<F11>", self._toggle_fullscreen)
 
         self._status_poll_ms = 3000
@@ -32,73 +30,70 @@ class PenKioskApp:
         self._bulk_stop_value = StringVar(value="No")
         self._max_pen_distance_var = StringVar(value="")
         self._inline_error_var = StringVar(value="")
+        self._showing_status_card = True
 
         self._connection_badge_label: Label | None = None
         self._busy_badge_label: Label | None = None
-        self._feedback_box: Text | None = None
+        self._feedback_box = None
+        self._status_card: Frame | None = None
+        self._change_pen_card: Frame | None = None
+        self._mode_label_var = StringVar(value="Status")
+        self._switch_canvas: Canvas | None = None
+        self._switch_knob: int | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
         root_frame = Frame(self._root, bg="#0f172a", padx=24, pady=20)
         root_frame.pack(fill=BOTH, expand=True)
 
-        top_bar = Frame(root_frame, bg="#0f172a")
-        top_bar.pack(fill=X, pady=(0, 14))
+        switch_row = Frame(root_frame, bg="#0f172a")
+        switch_row.pack(fill=X, pady=(0, 14))
         Label(
-            top_bar,
-            text="Diwan Pen Config",
+            switch_row,
+            textvariable=self._mode_label_var,
             bg="#0f172a",
-            fg="#f8fafc",
-            font=("Segoe UI", 28, "bold"),
-        ).pack(side=LEFT)
-        Button(
-            top_bar,
-            text="Exit",
-            command=self._prompt_exit,
-            bg="#475569",
-            fg="#ffffff",
-            activebackground="#64748b",
-            activeforeground="#ffffff",
-            relief="flat",
-            padx=24,
-            pady=12,
+            fg="#cbd5e1",
             font=("Segoe UI", 14, "bold"),
-            cursor="hand2",
         ).pack(side=RIGHT)
-
-        cards_row = Frame(root_frame, bg="#0f172a")
-        cards_row.pack(fill=BOTH, expand=True)
-
-        status_card = Frame(cards_row, bg="#111827", padx=20, pady=20, highlightbackground="#334155", highlightthickness=1)
-        status_card.pack(side=LEFT, fill=BOTH, expand=True, padx=(0, 10))
-        self._build_status_card(status_card)
-
-        change_pen_card = Frame(cards_row, bg="#111827", padx=20, pady=20, highlightbackground="#334155", highlightthickness=1)
-        change_pen_card.pack(side=LEFT, fill=BOTH, expand=True, padx=(10, 0))
-        self._build_change_pen_card(change_pen_card)
-
-        feedback_card = Frame(root_frame, bg="#111827", padx=20, pady=16, highlightbackground="#334155", highlightthickness=1)
-        feedback_card.pack(fill=BOTH, expand=False, pady=(14, 0))
-        Label(
-            feedback_card,
-            text="Operation Feedback",
-            bg="#111827",
-            fg="#f8fafc",
-            font=("Segoe UI", 18, "bold"),
-        ).pack(anchor="w", pady=(0, 8))
-        self._feedback_box = Text(
-            feedback_card,
-            height=7,
-            bg="#0b1220",
-            fg="#e2e8f0",
-            insertbackground="#e2e8f0",
-            relief="flat",
-            font=("Consolas", 12),
-            padx=10,
-            pady=10,
-            state="disabled",
+        self._switch_canvas = Canvas(
+            switch_row,
+            width=140,
+            height=44,
+            bg="#0f172a",
+            highlightthickness=0,
+            bd=0,
         )
-        self._feedback_box.pack(fill=BOTH, expand=True)
+        self._switch_canvas.pack(side=RIGHT, padx=(0, 10))
+        self._switch_canvas.create_rectangle(4, 10, 136, 34, outline="#64748b", fill="#1e293b", width=2)
+        self._switch_knob = self._switch_canvas.create_oval(8, 12, 56, 32, fill="#e2e8f0", outline="#cbd5e1")
+        self._switch_canvas.create_text(30, 22, text="S", fill="#0f172a", font=("Segoe UI", 12, "bold"))
+        self._switch_canvas.create_text(110, 22, text="P", fill="#cbd5e1", font=("Segoe UI", 12, "bold"))
+        self._switch_canvas.bind("<Button-1>", self._toggle_cards_event)
+
+        cards_container = Frame(root_frame, bg="#0f172a")
+        cards_container.pack(fill=BOTH, expand=True)
+
+        self._status_card = Frame(
+            cards_container,
+            bg="#111827",
+            padx=20,
+            pady=20,
+            highlightbackground="#334155",
+            highlightthickness=1,
+        )
+        self._build_status_card(self._status_card)
+
+        self._change_pen_card = Frame(
+            cards_container,
+            bg="#111827",
+            padx=20,
+            pady=20,
+            highlightbackground="#334155",
+            highlightthickness=1,
+        )
+        self._build_change_pen_card(self._change_pen_card)
+
+        self._show_status_card()
 
     def _build_status_card(self, parent: Frame) -> None:
         Label(
@@ -106,11 +101,11 @@ class PenKioskApp:
             text="Status",
             bg="#111827",
             fg="#f8fafc",
-            font=("Segoe UI", 24, "bold"),
-        ).pack(anchor="w", pady=(0, 16))
+            font=("Segoe UI", 18, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
         badges_row = Frame(parent, bg="#111827")
-        badges_row.pack(fill=X, pady=(0, 14))
+        badges_row.pack(fill=X, pady=(0, 10))
         self._connection_badge_label = self._badge(badges_row, self._connection_badge, ok=True)
         self._connection_badge_label.pack(side=LEFT, padx=(0, 8))
         self._busy_badge_label = self._badge(badges_row, self._busy_badge, ok=True)
@@ -130,8 +125,8 @@ class PenKioskApp:
             text="Change Pen",
             bg="#111827",
             fg="#f8fafc",
-            font=("Segoe UI", 24, "bold"),
-        ).pack(anchor="w", pady=(0, 16))
+            font=("Segoe UI", 18, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
         actions_row = Frame(parent, bg="#111827")
         actions_row.pack(fill=X, pady=(0, 14))
@@ -145,8 +140,8 @@ class PenKioskApp:
             activeforeground="#ffffff",
             relief="flat",
             padx=30,
-            pady=18,
-            font=("Segoe UI", 18, "bold"),
+            pady=14,
+            font=("Segoe UI", 15, "bold"),
             cursor="hand2",
         ).pack(side=LEFT, fill=X, expand=True, padx=(0, 8))
         Button(
@@ -159,8 +154,8 @@ class PenKioskApp:
             activeforeground="#ffffff",
             relief="flat",
             padx=30,
-            pady=18,
-            font=("Segoe UI", 18, "bold"),
+            pady=14,
+            font=("Segoe UI", 15, "bold"),
             cursor="hand2",
         ).pack(side=LEFT, fill=X, expand=True, padx=(8, 0))
 
@@ -169,7 +164,7 @@ class PenKioskApp:
             text="Max Pen Distance (meters)",
             bg="#111827",
             fg="#cbd5e1",
-            font=("Segoe UI", 14, "bold"),
+            font=("Segoe UI", 13, "bold"),
         ).pack(anchor="w", pady=(10, 4))
 
         input_row = Frame(parent, bg="#111827")
@@ -177,7 +172,7 @@ class PenKioskApp:
         Entry(
             input_row,
             textvariable=self._max_pen_distance_var,
-            font=("Segoe UI", 16),
+            font=("Segoe UI", 14),
             bg="#0b1220",
             fg="#f8fafc",
             insertbackground="#f8fafc",
@@ -194,8 +189,8 @@ class PenKioskApp:
             activeforeground="#ffffff",
             relief="flat",
             padx=24,
-            pady=14,
-            font=("Segoe UI", 14, "bold"),
+            pady=10,
+            font=("Segoe UI", 13, "bold"),
             cursor="hand2",
         ).pack(side=LEFT)
 
@@ -218,7 +213,7 @@ class PenKioskApp:
             relief="flat",
             padx=24,
             pady=16,
-            font=("Segoe UI", 16, "bold"),
+            font=("Segoe UI", 14, "bold"),
             cursor="hand2",
         ).pack(fill=X, pady=(2, 0))
 
@@ -228,49 +223,65 @@ class PenKioskApp:
             textvariable=text_variable,
             bg="#14532d" if ok else "#7f1d1d",
             fg="#dcfce7" if ok else "#fee2e2",
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             padx=12,
-            pady=6,
+            pady=4,
         )
 
     def _metric_row(self, parent: Frame, key: str, value: StringVar) -> None:
         row = Frame(parent, bg="#111827")
-        row.pack(fill=X, pady=5)
+        row.pack(fill=X, pady=3)
         Label(
             row,
             text=key,
             bg="#111827",
             fg="#94a3b8",
-            font=("Segoe UI", 13, "bold"),
+            font=("Segoe UI", 12, "bold"),
         ).pack(side=LEFT)
         Label(
             row,
             textvariable=value,
             bg="#111827",
             fg="#f8fafc",
-            font=("Segoe UI", 13, "bold"),
+            font=("Segoe UI", 12, "bold"),
         ).pack(side=RIGHT)
-
-    def _on_escape(self, _event: object) -> None:
-        self._prompt_exit()
 
     def _toggle_fullscreen(self, _event: object) -> None:
         current = bool(self._root.attributes("-fullscreen"))
         self._root.attributes("-fullscreen", not current)
 
-    def _prompt_exit(self) -> None:
-        if messagebox.askyesno("Exit", "Exit kiosk mode?"):
-            self._root.destroy()
+    def _show_status_card(self) -> None:
+        if self._change_pen_card is not None:
+            self._change_pen_card.pack_forget()
+        if self._status_card is not None:
+            self._status_card.pack(fill=BOTH, expand=True)
+        self._showing_status_card = True
+        self._mode_label_var.set("Status")
+        if self._switch_canvas is not None and self._switch_knob is not None:
+            self._switch_canvas.coords(self._switch_knob, 8, 12, 56, 32)
+
+    def _show_change_pen_card(self) -> None:
+        if self._status_card is not None:
+            self._status_card.pack_forget()
+        if self._change_pen_card is not None:
+            self._change_pen_card.pack(fill=BOTH, expand=True)
+        self._showing_status_card = False
+        self._mode_label_var.set("Change Pen")
+        if self._switch_canvas is not None and self._switch_knob is not None:
+            self._switch_canvas.coords(self._switch_knob, 84, 12, 132, 32)
+
+    def _toggle_cards(self) -> None:
+        if self._showing_status_card:
+            self._show_change_pen_card()
+            return
+        self._show_status_card()
+
+    def _toggle_cards_event(self, _event: object) -> None:
+        self._toggle_cards()
 
     def _append_feedback(self, message: str, is_error: bool = False) -> None:
-        if self._feedback_box is None:
-            return
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"[{timestamp}] {'ERROR: ' if is_error else ''}{message}\n"
-        self._feedback_box.configure(state="normal")
-        self._feedback_box.insert(END, line)
-        self._feedback_box.see(END)
-        self._feedback_box.configure(state="disabled")
+        _ = message
+        _ = is_error
 
     @staticmethod
     def _format_meters_from_mm(value: object) -> str:
