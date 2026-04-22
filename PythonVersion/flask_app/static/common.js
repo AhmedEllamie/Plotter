@@ -16,6 +16,7 @@ const DEFAULT_PRINT_SETTINGS = {
 const DEFAULT_CONNECTION_SETTINGS = {
   comPort: "",
   baudRate: 250000,
+  apiKey: "",
 };
 
 const DEFAULT_CAPTURE_SETTINGS = {
@@ -30,20 +31,38 @@ function parseApiResponse(response) {
     throw new Error(`Invalid API response (${response.status})`);
   }).then((payload) => {
     if (!response.ok || payload.success === false) {
-      const message = payload?.message || `Request failed (${response.status})`;
+      let message = payload?.message || `Request failed (${response.status})`;
+      if (response.status === 401) {
+        message = `${message} Configure a valid API key from the Configuration page.`;
+      }
       throw new Error(message);
     }
     return payload.data;
   });
 }
 
+function buildAuthHeaders() {
+  const connection = loadConnectionSettings();
+  const apiKey = String(connection.apiKey || "").trim();
+  if (!apiKey) {
+    return {};
+  }
+  return { "X-API-Key": apiKey };
+}
+
+async function apiFetch(url, options = {}) {
+  const providedHeaders = options.headers || {};
+  const headers = { ...providedHeaders, ...buildAuthHeaders() };
+  return fetch(url, { ...options, headers });
+}
+
 async function apiGet(url) {
-  const response = await fetch(url, { method: "GET" });
+  const response = await apiFetch(url, { method: "GET" });
   return parseApiResponse(response);
 }
 
 async function apiPostJson(url, body = {}) {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -52,7 +71,7 @@ async function apiPostJson(url, body = {}) {
 }
 
 async function apiPostForm(url, formData) {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: "POST",
     body: formData,
   });

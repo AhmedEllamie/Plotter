@@ -40,6 +40,7 @@ sudo nano /etc/diwan-signature/diwan-signature.env
 
 At minimum set:
 
+- `PLOTTER_API_KEY` to a long random shared secret (required for all `/api/*` and `/printer/*` calls).
 - `CAPTURE_RESET_URL` to your reset endpoint.
 
 If scanner integration is used, also set:
@@ -80,7 +81,7 @@ sudo systemctl status diwan-signature-flask
 Local health check:
 
 ```bash
-curl http://127.0.0.1:5001/api/health
+curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health
 ```
 
 UI:
@@ -175,6 +176,8 @@ sudo loginctl enable-linger $USER
   - `systemctl --user status diwan-pen-kiosk.service`
   - `journalctl --user -u diwan-pen-kiosk.service -f`
 - API errors in kiosk feedback area:
-  - verify Flask service is reachable at `http://127.0.0.1:5001/api/health`
+  - verify Flask service is reachable with API key header:
+    - `curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health`
+  - verify API key is set in `/configuration` page on the kiosk browser profile.
 - Opens but not fullscreen:
   - use `F11` and check desktop environment fullscreen restrictions

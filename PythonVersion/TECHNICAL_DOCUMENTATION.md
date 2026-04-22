@@ -511,6 +511,7 @@ Intended for graphical user session; separate from Flask backend service.
 
 ### 16.1 Capture
 
+- `PLOTTER_API_KEY` (required shared inbound auth secret)
 - `CAPTURE_RESET_URL`
 - `CAPTURE_RESET_TOKEN`
 - `CAPTURE_RESET_TIMEOUT_SECONDS` (float)
@@ -553,8 +554,11 @@ Operational implications:
 
 ## 18) Security and Operational Notes
 
-- No authentication or authorization is built into Flask/FastAPI endpoints by default.
-- Scanner and capture integrations support outbound bearer tokens but not inbound API auth.
+- Inbound API key authentication is required for:
+  - Flask: all `/api/*` endpoints
+  - FastAPI: all `/printer/*` endpoints
+- Clients must send header `X-API-Key` with the same secret configured in `PLOTTER_API_KEY`.
+- Scanner and capture integrations continue to support outbound bearer tokens.
 - Production deployment should be protected at network/proxy layer.
 - Services may run as root in provided templates; prefer least-privilege user where possible.
 - On Linux, serial access generally requires membership in `dialout`.

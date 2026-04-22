@@ -319,7 +319,7 @@ async function runVoid() {
 }
 
 async function loadLatestCapture() {
-  const response = await fetch("/api/capture/latest");
+  const response = await apiFetch("/api/capture/latest", { method: "GET" });
   if (response.status === 404) {
     return false;
   }

@@ -28,6 +28,7 @@ from PythonVersion.flask_app.config import (
 from PythonVersion.flask_app.response import api_error, api_success
 from PythonVersion.flask_app.state import RuntimeState
 from PythonVersion.models.contracts import PrintRequest, get_paper_size_mm, parse_bool
+from PythonVersion.security.api_key_auth import validate_api_key
 from PythonVersion.services.printer.svg_converter import convert_to_gcode
 
 
@@ -264,6 +265,28 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     last_scanner_manual_config: dict[str, Any] = {}
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+    @app.before_request
+    def require_api_key_for_api_routes() -> tuple[Response, int] | None:
+        if not request.path.startswith("/api/"):
+            return None
+
+        validation = validate_api_key(request.headers.get("X-API-Key"))
+        if validation.is_valid:
+            return None
+
+        if not validation.is_server_configured:
+            return api_error(
+                validation.message,
+                error_code="AUTH_NOT_CONFIGURED",
+                status_code=503,
+            )
+
+        return api_error(
+            validation.message,
+            error_code="UNAUTHORIZED",
+            status_code=401,
+        )
 
     def _merge_scanner_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
         merged = dict(payload)

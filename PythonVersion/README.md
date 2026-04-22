@@ -73,7 +73,7 @@ Open:
 Frontend notes:
 - Main page uses a visual status dashboard and main actions (`Capture`, `Print`, `Upload`, `Void`, `Status`).
 - Main page also supports `Bulk Print` with a copies prompt (1-100) using the same uploaded SVG workflow.
-- Connection and print settings are saved in browser localStorage and reused for printing.
+- Connection, API key, and print settings are saved in browser localStorage and reused for printing.
 
 Flask APIs are available under `/api`, including:
 - `POST /api/connect`
@@ -98,12 +98,29 @@ Flask APIs are available under `/api`, including:
 - `GET /api/config`
 - `GET /api/serial-ports` (lists USB/COM devices via pyserial; used by Configuration “Scan ports”)
 
+## Inbound API authentication (required)
+
+Both HTTP surfaces now require a shared API key:
+- Flask: all `/api/*` endpoints
+- FastAPI: all `/printer/*` endpoints
+
+Configure server key in environment:
+- `PLOTTER_API_KEY=<long-random-secret>`
+
+Clients must send this header on every API call:
+- `X-API-Key: <same-secret>`
+
+Frontend usage:
+- Open `/configuration` and set **API Key**.
+- The browser UI automatically attaches `X-API-Key` for all requests.
+
 ### Capture integration environment variables (Flask)
 
 - `CAPTURE_RESET_URL` (required for `POST /api/capture/request`)
 - `CAPTURE_RESET_TOKEN` (optional bearer token)
 - `CAPTURE_RESET_TIMEOUT_SECONDS` (optional, default `8.0`)
 - `CAPTURE_RESET_METHOD` (optional, default `POST`)
+- `PLOTTER_API_KEY` (required inbound auth secret for `/api/*` and `/printer/*`)
 
 ## Run CLI
 

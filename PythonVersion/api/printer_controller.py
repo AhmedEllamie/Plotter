@@ -7,7 +7,7 @@ from dataclasses import asdict
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Header, UploadFile
 
 from PythonVersion.dependency_injection import ServiceProvider, get_service_provider
 from PythonVersion.models.contracts import (
@@ -17,6 +17,7 @@ from PythonVersion.models.contracts import (
     get_paper_size_mm,
     parse_paper,
 )
+from PythonVersion.security.api_key_auth import validate_api_key
 from PythonVersion.services.printer.svg_converter import convert_to_gcode
 
 
@@ -92,9 +93,18 @@ def _parse_print_with_approval_request(raw_json: str) -> PrintWithApprovalReques
         raise HTTPException(status_code=400, detail=f"Invalid print request payload: {ex}") from ex
 
 
+def _require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
+    validation = validate_api_key(x_api_key)
+    if validation.is_valid:
+        return
+    if not validation.is_server_configured:
+        raise HTTPException(status_code=503, detail=validation.message)
+    raise HTTPException(status_code=401, detail=validation.message)
+
+
 def create_printer_router(provider: ServiceProvider | None = None) -> APIRouter:
     provider = provider or get_service_provider()
-    router = APIRouter(prefix="/printer", tags=["printer"])
+    router = APIRouter(prefix="/printer", tags=["printer"], dependencies=[Depends(_require_api_key)])
 
     @router.post("/connect")
     async def connect(com_port: str | None = None, baud_rate: int | None = None):

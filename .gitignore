@@ -4,3 +4,21 @@
 **/*-314.pyc
 PythonVersion/__pycache__/*-312.pyc
 PythonVersion/__pycache__/*-314.pyc
+
+# .NET build artifacts
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# .NET/NuGet
+**/*.user
+**/*.suo
+**/*.userosscache
+**/*.sln.docstates
+**/packages/
+**/*.nupkg
+
+# Visual Studio / VS Code
+.vs/
+*.code-workspace

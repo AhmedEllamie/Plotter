@@ -40,6 +40,7 @@ function readConnectionForm() {
   return {
     comPort: document.getElementById("comPort").value.trim(),
     baudRate: FIXED_BAUD_RATE,
+    apiKey: document.getElementById("apiKey").value.trim(),
   };
 }
 
@@ -195,6 +196,7 @@ function hydrateConfiguration() {
   } else {
     comPortInput.value = "";
   }
+  document.getElementById("apiKey").value = String(connection.apiKey || "");
 
   const print = loadPrintSettings();
   document.getElementById("width").value = print.width || "210mm";
@@ -519,7 +521,7 @@ async function flushManualFocusSync() {
 }
 
 function registerPersistenceListeners() {
-  const connectionFields = ["comPort"];
+  const connectionFields = ["comPort", "apiKey"];
   const printFields = [
     "width",
     "height",
