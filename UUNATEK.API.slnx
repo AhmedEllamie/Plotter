@@ -1,6 +1,0 @@
-<Solution>
-  <Project Path="UUNATEK.API/UUNATEK.API.csproj" />
-  <Project Path="UUNATEK.Domain/UUNATEK.Domain.csproj" />
-  <Project Path="UUNATEK.WindowsForm/UUNATEK.WindowsForm.csproj" Id="e16f2526-6444-4bb0-bc43-206c9f034c31" />
-  <Project Path="UUNATRK.Application/UUNATRK.Application.csproj" Id="0d116a4d-e212-4ddf-ac07-e498bde83ce2" />
-</Solution>

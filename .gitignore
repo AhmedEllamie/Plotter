@@ -1,24 +1,45 @@
-**/__pycache__/
-**/*.pyc
-**/*-312.pyc
-**/*-314.pyc
-PythonVersion/__pycache__/*-312.pyc
-PythonVersion/__pycache__/*-314.pyc
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
 
-# .NET build artifacts
-**/bin/
-**/obj/
-**/out/
-**/publish/
+# Virtual environments
+.venv/
+venv/
+env/
 
-# .NET/NuGet
-**/*.user
-**/*.suo
-**/*.userosscache
-**/*.sln.docstates
-**/packages/
-**/*.nupkg
-
-# Visual Studio / VS Code
+# Editor / IDE
 .vs/
+.vscode/
+.idea/
 *.code-workspace
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Runtime data
+diwan_signature/distance_stats.json
+
+# Generated API docs
+docs/generated/
+
+# Local environment files
+.env
+.env.*
+!deploy/**/*.env.example
+
+# OS noise
+Thumbs.db
+.DS_Store

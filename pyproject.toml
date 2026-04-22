@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diwan-signature"
+version = "1.0.0"
+description = "Diwan Signature - printer automation package (Flask UI/API, FastAPI, CLI, and desktop kiosk)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Diwan" },
+]
+license = { text = "Proprietary" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "flask>=3.0.0",
+    "uvicorn>=0.30.0",
+    "pyserial>=3.5",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+diwan-signature = "diwan_signature.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["diwan_signature*"]
+
+[tool.setuptools.package-data]
+"diwan_signature.web.flask_app" = ["static/**/*"]
