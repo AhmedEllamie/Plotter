@@ -114,6 +114,18 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         methods=["GET"],
     )
     app.add_url_rule(
+        "/api/config/scanner/capture/run",
+        endpoint="config_scanner_capture_run",
+        view_func=handlers["scanner_capture_run"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/capture/run/<string:job_id>",
+        endpoint="config_scanner_capture_run_status",
+        view_func=handlers["scanner_capture_run_status"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/api/config/scanner/capture-manual",
         endpoint="config_scanner_capture_manual",
         view_func=handlers["scanner_capture_manual"],

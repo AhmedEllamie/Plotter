@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from flask import Flask, Response, request, send_file, send_from_directory
 
@@ -264,6 +265,8 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     scanner_settings = load_scanner_service_settings()
     runtime_state = RuntimeState()
     last_scanner_manual_config: dict[str, Any] = {}
+    capture_jobs_lock = threading.Lock()
+    capture_jobs: dict[str, dict[str, Any]] = {}
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -378,6 +381,119 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if manual_config_response.get("ok") is False:
             raise RuntimeError(manual_config_response.get("message") or "Scanner manual config failed.")
         return manual_config_response
+
+    def _capture_job_snapshot(job_id: str) -> dict[str, Any]:
+        with capture_jobs_lock:
+            raw = capture_jobs.get(job_id)
+            if raw is None:
+                raise KeyError(job_id)
+            return dict(raw)
+
+    def _capture_job_update(job_id: str, **updates: Any) -> None:
+        with capture_jobs_lock:
+            job = capture_jobs.get(job_id)
+            if job is None:
+                return
+            job.update(updates)
+
+    def _run_capture_job(job_id: str, readability_required: bool, timeout_seconds: int) -> None:
+        _capture_job_update(job_id, state="running", startedAt=datetime.now(timezone.utc).isoformat())
+        try:
+            _, start_capture_response = _scanner_request_json(
+                scanner_settings,
+                "/capture/start",
+                method="POST",
+                body={
+                    "readability_required": bool(readability_required),
+                    "timeout_seconds": int(timeout_seconds),
+                },
+            )
+            if start_capture_response.get("ok") is False:
+                raise RuntimeError(start_capture_response.get("message") or "Scanner capture start failed.")
+            capture = start_capture_response.get("capture") or {}
+            capture_id = str(capture.get("capture_id") or capture.get("job_id") or "").strip()
+            if not capture_id:
+                raise RuntimeError("Scanner capture id was not returned.")
+            _capture_job_update(job_id, captureId=capture_id, scannerStatus="started")
+
+            max_attempts = max(1, scanner_settings.job_poll_max_attempts)
+            interval_seconds = max(0.05, float(scanner_settings.job_poll_interval_seconds))
+            latest_capture = capture
+            for attempt in range(max_attempts):
+                _, capture_status_response = _scanner_request_json(
+                    scanner_settings,
+                    f"/capture/{capture_id}/status",
+                    method="GET",
+                )
+                latest_capture = capture_status_response.get("capture") or {}
+                scanner_status = str(latest_capture.get("status") or "").strip().lower()
+                _capture_job_update(
+                    job_id,
+                    scannerStatus=scanner_status or "unknown",
+                    attempts=attempt + 1,
+                )
+                if scanner_status in {"succeeded", "failed"}:
+                    break
+                time.sleep(interval_seconds)
+
+            final_status = str(latest_capture.get("status") or "").strip().lower()
+            if final_status != "succeeded":
+                if final_status not in {"failed"}:
+                    _capture_job_update(
+                        job_id,
+                        state="timeout",
+                        completedAt=datetime.now(timezone.utc).isoformat(),
+                        error="Capture status polling timed out.",
+                    )
+                    return
+                raise RuntimeError(
+                    f"Scanner capture failed: {latest_capture.get('error') or 'unknown_error'} - "
+                    f"{latest_capture.get('detail') or 'no detail'}."
+                )
+
+            _, content_type, image_payload = _scanner_request_bytes(scanner_settings, f"/capture/{capture_id}/result")
+            if not image_payload:
+                raise RuntimeError("Scanner returned an empty rectified image.")
+            model = runtime_state.set_captured_image(
+                file_name=f"rectified-{capture_id}.png",
+                content_type=content_type,
+                content=image_payload,
+            )
+            _capture_job_update(
+                job_id,
+                state="succeeded",
+                completedAt=datetime.now(timezone.utc).isoformat(),
+                fileName=model.file_name,
+                contentType=model.content_type,
+                capturedAt=_to_iso8601_utc(model.captured_at),
+                imageUrl="/api/config/capture/latest/image",
+            )
+        except HTTPError as ex:
+            body = ex.read().decode("utf-8", errors="ignore")
+            _capture_job_update(
+                job_id,
+                state="failed",
+                completedAt=datetime.now(timezone.utc).isoformat(),
+                error=f"Scanner request failed with HTTP {ex.code}.",
+                errorCode="SCANNER_HTTP_ERROR",
+                details={"statusCode": ex.code, "responseBody": body[:4000]},
+            )
+        except URLError as ex:
+            _capture_job_update(
+                job_id,
+                state="failed",
+                completedAt=datetime.now(timezone.utc).isoformat(),
+                error=f"Failed to reach scanner service: {ex}",
+                errorCode="SCANNER_UNREACHABLE",
+            )
+        except Exception as ex:
+            _capture_job_update(
+                job_id,
+                state="failed",
+                completedAt=datetime.now(timezone.utc).isoformat(),
+                error=str(ex),
+                errorCode="SCANNER_CAPTURE_FAILED",
+            )
 
     @app.get("/")
     def home() -> Response:
@@ -617,6 +733,56 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             download_name=f"rectified-{capture_id}.png",
             max_age=0,
         )
+
+    @app.post("/api/scanner/capture/run")
+    def scanner_capture_run() -> tuple[Response, int]:
+        payload = _get_json_dict()
+        readability_required = bool(payload.get("readability_required", True))
+        timeout_seconds = int(payload.get("timeout_seconds", 15))
+        job_id = str(uuid4())
+        with capture_jobs_lock:
+            capture_jobs[job_id] = {
+                "jobId": job_id,
+                "state": "pending",
+                "readabilityRequired": readability_required,
+                "timeoutSeconds": timeout_seconds,
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "startedAt": None,
+                "completedAt": None,
+                "captureId": None,
+                "scannerStatus": None,
+                "attempts": 0,
+                "error": None,
+                "errorCode": None,
+                "details": None,
+                "fileName": None,
+                "contentType": None,
+                "capturedAt": None,
+                "imageUrl": None,
+            }
+
+        worker = threading.Thread(
+            target=_run_capture_job,
+            args=(job_id, readability_required, timeout_seconds),
+            daemon=True,
+        )
+        worker.start()
+        return api_success(
+            "Scanner capture orchestration started.",
+            data={"jobId": job_id, "state": "pending"},
+            status_code=202,
+        )
+
+    @app.get("/api/scanner/capture/run/<string:job_id>")
+    def scanner_capture_run_status(job_id: str) -> tuple[Response, int]:
+        job_id = job_id.strip()
+        if not job_id:
+            return api_error("job_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
+        try:
+            snapshot = _capture_job_snapshot(job_id)
+        except KeyError:
+            return api_error("Capture job not found.", error_code="CAPTURE_JOB_NOT_FOUND", status_code=404)
+        return api_success("Capture orchestration status loaded.", data=snapshot)
 
     @app.get("/api/serial-ports")
     def serial_ports() -> tuple[Response, int]:
@@ -1211,6 +1377,8 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         "scanner_capture_start": scanner_capture_start,
         "scanner_capture_status": scanner_capture_status,
         "scanner_capture_result": scanner_capture_result,
+        "scanner_capture_run": scanner_capture_run,
+        "scanner_capture_run_status": scanner_capture_run_status,
         "serial_ports": serial_ports,
         "serial_port_check": serial_port_check,
         "connect": connect,
