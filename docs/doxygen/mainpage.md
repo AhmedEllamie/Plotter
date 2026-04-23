@@ -1,4 +1,4 @@
-# Diwan Signature API Documentation
+# Plotter Signature API Documentation
 
 This site is generated with Doxygen from the markdown files under:
 

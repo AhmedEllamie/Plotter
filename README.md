@@ -1,14 +1,14 @@
-# Diwan Signature
+# Plotter Signature
 
-Printer automation for the Diwan signature workflow. The project exposes the same service graph through three delivery surfaces - Flask (UI + REST), FastAPI (REST only), and a CLI - and ships with a Tkinter-based operator kiosk.
+Printer automation for the Plotter signature workflow. The project exposes the same service graph through three delivery surfaces - Flask (UI + REST), FastAPI (REST only), and a CLI - and ships with a Tkinter-based operator kiosk.
 
 ## Repository layout
 
 ```
 .
-├── diwan_signature/           # Main Python package
+├── plotter_signature/           # Main Python package
 │   ├── __init__.py
-│   ├── __main__.py            # `python -m diwan_signature`
+│   ├── __main__.py            # `python -m plotter_signature`
 │   ├── cli.py                 # Command-line entrypoint
 │   ├── dependency_injection.py
 │   ├── domain/                # Pure contracts and value objects
@@ -69,13 +69,13 @@ pip install -e .
 CLI help:
 
 ```bash
-python -m diwan_signature --help
+python -m plotter_signature --help
 ```
 
 Flask UI + API (port 5001):
 
 ```bash
-python -m diwan_signature serve-flask --host 0.0.0.0 --port 5001
+python -m plotter_signature serve-flask --host 0.0.0.0 --port 5001
 ```
 
 Open:
@@ -86,13 +86,13 @@ Open:
 FastAPI printer endpoints (port 5000):
 
 ```bash
-python -m diwan_signature serve-api --host 0.0.0.0 --port 5000
+python -m plotter_signature serve-api --host 0.0.0.0 --port 5000
 ```
 
 Pen config kiosk (Linux/X11):
 
 ```bash
-python -m diwan_signature.desktop.pen_kiosk
+python -m plotter_signature.desktop.pen_kiosk
 ```
 
 ## Authentication
@@ -119,7 +119,7 @@ Optional defaults can be set in `appsettings.json` at the repo root:
 }
 ```
 
-Additional runtime environment variables are documented in `docs/TECHNICAL_DOCUMENTATION.md` and `deploy/ubuntu/diwan-signature.env.example`.
+Additional runtime environment variables are documented in `docs/TECHNICAL_DOCUMENTATION.md` and `deploy/ubuntu/plotter-signature.env.example`.
 
 ## Documentation
 

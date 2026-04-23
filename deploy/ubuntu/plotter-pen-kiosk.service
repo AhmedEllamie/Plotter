@@ -1,0 +1,17 @@
+[Unit]
+Description=Plotter Pen Config Kiosk (User)
+After=graphical-session.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/plotter-signature
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+ExecStart=/opt/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

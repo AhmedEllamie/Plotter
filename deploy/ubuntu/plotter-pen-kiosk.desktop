@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Plotter Pen Config Kiosk
+Comment=Start Plotter Pen Config fullscreen kiosk
+Exec=/opt/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk
+Path=/opt/plotter-signature
+Terminal=false
+X-GNOME-Autostart-enabled=true

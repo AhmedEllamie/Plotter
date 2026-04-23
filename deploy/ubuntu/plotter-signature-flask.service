@@ -1,0 +1,19 @@
+[Unit]
+Description=Plotter Signature Flask Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/plotter-signature
+EnvironmentFile=/etc/plotter-signature/plotter-signature.env
+ExecStart=/opt/plotter-signature/.venv/bin/python -m plotter_signature serve-flask --host 0.0.0.0 --port 5001
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

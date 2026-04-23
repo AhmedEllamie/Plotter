@@ -30,7 +30,7 @@ htmlcov/
 coverage.xml
 
 # Runtime data
-diwan_signature/distance_stats.json
+plotter_signature/distance_stats.json
 
 # Generated API docs
 docs/generated/

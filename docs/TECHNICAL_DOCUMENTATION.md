@@ -2,7 +2,7 @@
 
 ## 1) Purpose and Scope
 
-`Software` is a Python port of the Diwan signature printing workflow. It provides:
+`Software` is a Python port of the Plotter signature printing workflow. It provides:
 
 - A serial printer control layer for pen plotter-style hardware
 - SVG-to-G-code conversion
@@ -484,24 +484,24 @@ Primary commands in `main.py`:
 
 Assets:
 
-- `deploy/ubuntu/diwan-signature-flask.service`
-- `deploy/ubuntu/diwan-signature.env.example`
-- `deploy/ubuntu/diwan-pen-kiosk.service`
-- `deploy/ubuntu/diwan-pen-kiosk.desktop`
+- `deploy/ubuntu/plotter-signature-flask.service`
+- `deploy/ubuntu/plotter-signature.env.example`
+- `deploy/ubuntu/plotter-pen-kiosk.service`
+- `deploy/ubuntu/plotter-pen-kiosk.desktop`
 - `UBUNTU_RELEASE_GUIDE.md` for release process
 
 ### 15.1 Flask Service
 
 Runs:
-- `/opt/diwan-signature/.venv/bin/python -m Software.main serve-flask --host 0.0.0.0 --port 5001`
+- `/opt/plotter-signature/.venv/bin/python -m Software.main serve-flask --host 0.0.0.0 --port 5001`
 
 Uses env file:
-- `/etc/diwan-signature/diwan-signature.env`
+- `/etc/plotter-signature/plotter-signature.env`
 
 ### 15.2 Kiosk Service
 
 Runs:
-- `/opt/diwan-signature/.venv/bin/python -m Software.flask_app.pen_kiosk_app`
+- `/opt/plotter-signature/.venv/bin/python -m Software.flask_app.pen_kiosk_app`
 
 Intended for graphical user session; separate from Flask backend service.
 

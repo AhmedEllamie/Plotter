@@ -1,4 +1,4 @@
-PROJECT_NAME           = "Diwan Signature API"
+PROJECT_NAME           = "Plotter Signature API"
 PROJECT_NUMBER         = "pre-security"
 PROJECT_BRIEF          = "Generated API documentation for Flask and FastAPI surfaces"
 OUTPUT_DIRECTORY       = docs/generated

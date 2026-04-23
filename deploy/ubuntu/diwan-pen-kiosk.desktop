@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Diwan Pen Config Kiosk
-Comment=Start Diwan Pen Config fullscreen kiosk
-Exec=/opt/diwan-signature/.venv/bin/python -m diwan_signature.desktop.pen_kiosk
-Path=/opt/diwan-signature
-Terminal=false
-X-GNOME-Autostart-enabled=true

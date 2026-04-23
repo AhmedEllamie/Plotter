@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "diwan-signature"
+name = "plotter-signature"
 version = "1.0.0"
-description = "Diwan Signature - printer automation package (Flask UI/API, FastAPI, CLI, and desktop kiosk)."
+description = "Plotter Signature - printer automation package (Flask UI/API, FastAPI, CLI, and desktop kiosk)."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
@@ -27,14 +27,14 @@ dependencies = [
 ]
 
 [project.scripts]
-diwan-signature = "diwan_signature.cli:main"
+plotter-signature = "plotter_signature.cli:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["diwan_signature*"]
+include = ["plotter_signature*"]
 
 [tool.setuptools.package-data]
-"diwan_signature.web.flask_app" = ["static/**/*"]
+"plotter_signature.web.flask_app" = ["static/**/*"]

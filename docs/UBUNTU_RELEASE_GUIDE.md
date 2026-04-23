@@ -1,6 +1,6 @@
 # Ubuntu Release Guide (Flask UI + API)
 
-This guide prepares the `diwan_signature` package for production-style deployment on Ubuntu using `systemd`.
+This guide prepares the `plotter_signature` package for production-style deployment on Ubuntu using `systemd`.
 
 ## 1) Install OS packages
 
@@ -21,9 +21,9 @@ newgrp dialout
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone <YOUR_REPO_URL> diwan-signature
-sudo chown -R $USER:$USER /opt/diwan-signature
-cd /opt/diwan-signature
+sudo git clone <YOUR_REPO_URL> plotter-signature
+sudo chown -R $USER:$USER /opt/plotter-signature
+cd /opt/plotter-signature
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -33,9 +33,9 @@ pip install -r requirements.txt
 ## 3) Create runtime environment file
 
 ```bash
-sudo mkdir -p /etc/diwan-signature
-sudo cp deploy/ubuntu/diwan-signature.env.example /etc/diwan-signature/diwan-signature.env
-sudo nano /etc/diwan-signature/diwan-signature.env
+sudo mkdir -p /etc/plotter-signature
+sudo cp deploy/ubuntu/plotter-signature.env.example /etc/plotter-signature/plotter-signature.env
+sudo nano /etc/plotter-signature/plotter-signature.env
 ```
 
 At minimum set:
@@ -51,13 +51,13 @@ If scanner integration is used, also set:
 ## 4) Install systemd service
 
 ```bash
-sudo cp deploy/ubuntu/diwan-signature-flask.service /etc/systemd/system/diwan-signature-flask.service
+sudo cp deploy/ubuntu/plotter-signature-flask.service /etc/systemd/system/plotter-signature-flask.service
 ```
 
 Edit service user/group/path if needed:
 
 ```bash
-sudo nano /etc/systemd/system/diwan-signature-flask.service
+sudo nano /etc/systemd/system/plotter-signature-flask.service
 ```
 
 Important fields:
@@ -71,9 +71,9 @@ Important fields:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable diwan-signature-flask
-sudo systemctl start diwan-signature-flask
-sudo systemctl status diwan-signature-flask
+sudo systemctl enable plotter-signature-flask
+sudo systemctl start plotter-signature-flask
+sudo systemctl status plotter-signature-flask
 ```
 
 ## 6) Verify application
@@ -94,7 +94,7 @@ UI:
 Follow logs:
 
 ```bash
-sudo journalctl -u diwan-signature-flask -f
+sudo journalctl -u plotter-signature-flask -f
 ```
 
 Common checks:
@@ -113,11 +113,11 @@ Common checks:
 ## 8) Update deployment (new release)
 
 ```bash
-cd /opt/diwan-signature
+cd /opt/plotter-signature
 git pull
 source .venv/bin/activate
 pip install -r requirements.txt
-sudo systemctl restart diwan-signature-flask
+sudo systemctl restart plotter-signature-flask
 ```
 
 ## 9) Install fullscreen Pen Config kiosk app (Raspberry Pi)
@@ -135,19 +135,19 @@ Use both methods for reliability:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/ubuntu/diwan-pen-kiosk.service ~/.config/systemd/user/diwan-pen-kiosk.service
+cp deploy/ubuntu/plotter-pen-kiosk.service ~/.config/systemd/user/plotter-pen-kiosk.service
 
 mkdir -p ~/.config/autostart
-cp deploy/ubuntu/diwan-pen-kiosk.desktop ~/.config/autostart/diwan-pen-kiosk.desktop
+cp deploy/ubuntu/plotter-pen-kiosk.desktop ~/.config/autostart/plotter-pen-kiosk.desktop
 ```
 
 ### 9.2 Enable and start user service
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable diwan-pen-kiosk.service
-systemctl --user start diwan-pen-kiosk.service
-systemctl --user status diwan-pen-kiosk.service
+systemctl --user enable plotter-pen-kiosk.service
+systemctl --user start plotter-pen-kiosk.service
+systemctl --user status plotter-pen-kiosk.service
 ```
 
 To keep user services active even when no session is open (optional):
@@ -158,7 +158,7 @@ sudo loginctl enable-linger $USER
 
 ### 9.3 Verify startup on login
 
-1. Ensure Flask API service is running (`diwan-signature-flask` on port `5001`).
+1. Ensure Flask API service is running (`plotter-signature-flask` on port `5001`).
 2. Log out and log in again.
 3. Confirm kiosk app opens fullscreen automatically.
 4. Press `F11` to toggle fullscreen for debugging; `Esc` opens exit confirmation.
@@ -173,8 +173,8 @@ sudo loginctl enable-linger $USER
 ### 9.5 Kiosk troubleshooting
 
 - Kiosk window does not open:
-  - `systemctl --user status diwan-pen-kiosk.service`
-  - `journalctl --user -u diwan-pen-kiosk.service -f`
+  - `systemctl --user status plotter-pen-kiosk.service`
+  - `journalctl --user -u plotter-pen-kiosk.service -f`
 - API errors in kiosk feedback area:
   - verify Flask service is reachable with API key header:
     - `curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health`
