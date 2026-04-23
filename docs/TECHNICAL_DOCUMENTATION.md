@@ -101,7 +101,7 @@ Used for:
 - Serves:
   - `/` main web UI
   - `/configuration` config UI
-  - `/api/*` rich operational endpoints for print/capture/scanner/status
+  - grouped `/api/cmd/*` + `/api/config/*` operational endpoints
 - Includes extended integration behavior not present in the FastAPI surface
 
 ### 4.4 Tkinter Pen Kiosk Mode
@@ -109,7 +109,7 @@ Used for:
 `python -m Software.flask_app.pen_kiosk_app`
 
 - Fullscreen desktop operator UI
-- Uses Flask backend endpoints over HTTP (`/api/status`, `/api/change-pen/*`, `/api/reset`, `/api/pen-max-distance`)
+- Uses Flask backend endpoints over HTTP (`/api/cmd/status`, `/api/config/change-pen/*`, `/api/config/reset`, `/api/config/pen-max-distance`)
 
 ---
 
@@ -361,44 +361,49 @@ FastAPI validation style:
 From `flask_app/app.py`:
 
 Core printer:
-- `POST /api/connect`
-- `POST /api/disconnect`
-- `GET /api/status`
-- `POST /api/upload`
-- `POST /api/print`
-- `POST /api/print/bulk`
-- `POST /api/print/bulk/stop`
-- `POST /api/void`
-- `POST /api/change-pen/start`
-- `POST /api/change-pen/finish`
-- `POST /api/change-pen` (mode = start|finish)
-- `POST /api/reset`
-- `POST /api/pen-max-distance`
+- `POST /api/config/connect`
+- `POST /api/config/disconnect`
+- `GET /api/cmd/status`
+- `POST /api/config/upload`
+- `POST /api/cmd/print`
+- `POST /api/cmd/print/bulk`
+- `POST /api/cmd/bulk/stop`
+- `POST /api/cmd/void`
+- `POST /api/config/change-pen/start`
+- `POST /api/config/change-pen/finish`
+- `POST /api/config/change-pen` (mode = start|finish)
+- `POST /api/config/reset`
+- `POST /api/config/pen-max-distance`
 
 Capture and scanner:
-- `POST /api/capture/request` (trigger external capture reset URL)
-- `POST /api/capture`
-- `GET /api/capture/latest`
-- `GET /api/capture/latest/image`
-- `GET /api/scanner/stream.mjpg` (proxy stream)
-- `POST /api/scanner/manual-config`
-- `POST /api/scanner/focus-adjust`
-- `POST /api/scanner/capture/start`
-- `GET /api/scanner/capture/{capture_id}/status`
-- `GET /api/scanner/capture/{capture_id}/result`
-- `POST /api/scanner/capture-manual`
+- `POST /api/config/capture/request` (trigger external capture reset URL)
+- `POST /api/config/capture`
+- `GET /api/config/capture/latest`
+- `GET /api/config/capture/latest/image`
+- `GET /api/config/scanner/stream.mjpg` (proxy stream)
+- `POST /api/config/scanner/manual-config`
+- `POST /api/config/scanner/focus-adjust`
+- `POST /api/config/scanner/capture/start`
+- `GET /api/config/scanner/capture/{capture_id}/status`
+- `GET /api/config/scanner/capture/{capture_id}/result`
+- `POST /api/config/scanner/capture/run` (async one-call orchestration start, returns `jobId`)
+- `GET /api/config/scanner/capture/run/{job_id}` (orchestration job state)
+- `POST /api/config/scanner/capture-manual`
 
 System/config:
-- `GET /api/health`
+- `GET /api/cmd/health`
 - `GET /api/config`
-- `GET /api/serial-ports`
-- `GET /api/serial-port-check`
-- `GET /api/requests/{request_id}`
-- `GET /api/requests?count=10`
+- `GET /api/config/serial-ports`
+- `GET /api/config/serial-port-check`
+- `GET /api/config/requests/{request_id}`
+- `GET /api/config/requests?count=10`
 
 Flask response envelope:
 - success: `{ success: true, message, data, errorCode: null }`
 - error: `{ success: false, message, data: null, errorCode, details? }`
+- grouped public routes:
+  - command endpoints under `/api/cmd/*`
+  - non-command/config/scanner/capture endpoints under `/api/config/*`
 
 ---
 
@@ -421,6 +426,9 @@ Flask app can proxy/control an external scanner service:
 - focus mode + quad points config
 - manual capture polling loop with timeout attempts
 - result retrieval and local runtime storage
+- async orchestration endpoint:
+  - `POST /api/config/scanner/capture/run` starts server-side workflow
+  - `GET /api/config/scanner/capture/run/{job_id}` polls backend job state
 
 Note:
 - The code currently reads scanner token from `SCANNER_SERVICE_TOKEN`.
@@ -555,7 +563,7 @@ Operational implications:
 ## 18) Security and Operational Notes
 
 - Inbound API key authentication is required for:
-  - Flask: all `/api/*` endpoints
+  - Flask: all `/api/*` endpoints (including `/api/cmd/*` and `/api/config/*`)
   - FastAPI: all `/printer/*` endpoints
 - Clients must send header `X-API-Key` with the same secret configured in `PLOTTER_API_KEY`.
 - Scanner and capture integrations continue to support outbound bearer tokens.
@@ -598,7 +606,7 @@ Integration caveat:
 
 ### Bulk print stops unexpectedly
 
-- Check if `/api/print/bulk/stop` was triggered
+- Check if `/api/cmd/bulk/stop` was triggered
 - Inspect service logs for runtime exceptions mid-cycle
 
 ### Capture/scanner endpoints fail
@@ -606,11 +614,12 @@ Integration caveat:
 - Verify scanner service URL/token env values
 - Confirm scanner service endpoints exist and version matches expected routes
 - Validate timeout values are sufficient for environment
+- For one-call orchestration, inspect `/api/config/scanner/capture/run/{job_id}` state and error fields
 
 ### Pen remaining percent always 0
 
 - Set max pen distance with:
-  - API: `POST /api/pen-max-distance`
+  - API: `POST /api/config/pen-max-distance`
   - CLI: `set-pen-max-distance --meters <value>`
 
 ---

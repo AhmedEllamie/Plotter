@@ -1,12 +1,12 @@
 PROJECT_NAME           = "Plotter Signature API"
-PROJECT_NUMBER         = "pre-security"
-PROJECT_BRIEF          = "Generated API documentation for Flask and FastAPI surfaces"
+PROJECT_NUMBER         = "grouped-api"
+PROJECT_BRIEF          = "Generated API documentation for grouped Flask APIs"
 OUTPUT_DIRECTORY       = docs/generated
 CREATE_SUBDIRS         = NO
 OUTPUT_LANGUAGE        = English
 USE_MDFILE_AS_MAINPAGE = docs/doxygen/mainpage.md
 
-INPUT                  = docs/api-pre-security docs/doxygen/mainpage.md
+INPUT                  = docs/api-grouped docs/doxygen/mainpage.md
 FILE_PATTERNS          = *.md
 RECURSIVE              = YES
 EXCLUDE                =

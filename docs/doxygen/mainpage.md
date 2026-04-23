@@ -2,13 +2,12 @@
 
 This site is generated with Doxygen from the markdown files under:
 
-- `docs/api-pre-security`
+- `docs/api-grouped`
 
 ## Scope
 
-- Flask endpoints under `/api/*`
-- FastAPI printer endpoints under `/printer/*`
-- Request/response examples and notes for local integration
+- Flask grouped endpoints under `/api/cmd/*` and `/api/config/*` (legacy `/api/*` remains for compatibility)
+- Group-first endpoint reference for command and configuration workflows
 
 ## Authentication
 
@@ -22,5 +21,6 @@ The server key is configured through:
 
 ## Navigation
 
-- Use the sidebar tree to browse each endpoint page.
-- Use the search box to quickly locate paths like `/api/print` or `/api/status`.
+- Start from `Grouped Flask API Docs`.
+- Open `CMD APIs` and `Config APIs` pages from the sidebar.
+- Use search for paths like `/api/cmd/print` or `/api/config/scanner/capture/run`.
