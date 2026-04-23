@@ -133,7 +133,7 @@ class PenKioskApp:
         Button(
             actions_row,
             text="PenDown",
-            command=lambda: self._run_action("PenDown command sent.", "/api/change-pen/start"),
+            command=lambda: self._run_action("PenDown command sent.", "/api/config/change-pen/start"),
             bg="#0ea5e9",
             fg="#ffffff",
             activebackground="#0284c7",
@@ -147,7 +147,7 @@ class PenKioskApp:
         Button(
             actions_row,
             text="PenUp",
-            command=lambda: self._run_action("PenUp command sent.", "/api/change-pen/finish"),
+            command=lambda: self._run_action("PenUp command sent.", "/api/config/change-pen/finish"),
             bg="#16a34a",
             fg="#ffffff",
             activebackground="#15803d",
@@ -358,7 +358,7 @@ class PenKioskApp:
         def worker() -> None:
             self._api_busy = True
             try:
-                self._api_post("/api/pen-max-distance", {"meters": meters})
+                self._api_post("/api/config/pen-max-distance", {"meters": meters})
                 self._root.after(0, lambda: self._append_feedback("Max pen distance updated."))
                 self._root.after(0, self._refresh_status)
             except Exception as ex:
@@ -375,7 +375,7 @@ class PenKioskApp:
         def worker() -> None:
             self._api_busy = True
             try:
-                self._api_post("/api/reset", {"clearUploadedSvg": False})
+                self._api_post("/api/config/reset", {"clearUploadedSvg": False})
                 self._root.after(0, lambda: self._append_feedback("Distance reset completed."))
                 self._root.after(0, self._refresh_status)
             except Exception as ex:
@@ -396,7 +396,7 @@ class PenKioskApp:
 
     def _refresh_status(self) -> None:
         try:
-            status = self._api_get("/api/status")
+            status = self._api_get("/api/cmd/status")
             is_open = bool(status.get("is_open"))
             is_busy = bool(status.get("is_printing"))
 

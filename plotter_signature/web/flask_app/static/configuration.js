@@ -251,7 +251,7 @@ async function scanSerialPorts() {
   if (btn) btn.disabled = true;
   appendConfigLog("Scanning serial ports...");
   try {
-    const data = await apiGet("/api/serial-ports");
+    const data = await apiGet("/api/config/serial-ports");
     const input = document.getElementById("comPort");
     const datalist = document.getElementById("serialPortsList");
     const previousValue = (input?.value || "").trim();
@@ -300,7 +300,7 @@ async function refreshTtyPortStatus() {
     return;
   }
   try {
-    const data = await apiGet(`/api/serial-port-check?device=${encodeURIComponent(comPort)}`);
+    const data = await apiGet(`/api/config/serial-port-check?device=${encodeURIComponent(comPort)}`);
     const isReady = Boolean(data.exists) && Boolean(data.readable) && Boolean(data.writable);
     const flags = [
       data.exists ? "exists" : "missing",
@@ -327,7 +327,7 @@ async function connectPrinter() {
   }
   appendConfigLog(`Connecting printer${comPort ? ` on ${comPort}` : ""}...`);
   try {
-    await apiPostJson("/api/connect", payload);
+    await apiPostJson("/api/config/connect", payload);
     persistConnectionSettings();
     showConfigMessage("Printer connected.");
     appendConfigLog("Printer connected.");
@@ -342,7 +342,7 @@ async function connectPrinter() {
 async function disconnectPrinter() {
   appendConfigLog("Disconnecting printer...");
   try {
-    await apiPostJson("/api/disconnect");
+    await apiPostJson("/api/config/disconnect");
     showConfigMessage("Printer disconnected.");
     appendConfigLog("Printer disconnected.");
     await refreshTtyPortStatus();
@@ -357,7 +357,7 @@ async function runChangePen() {
   const mode = document.getElementById("penMode").value || "start";
   appendConfigLog(`Running ChangePen (${mode})...`);
   try {
-    await apiPostJson(`/api/change-pen/${mode}`);
+    await apiPostJson(`/api/config/change-pen/${mode}`);
     persistPrintSettings();
     showConfigMessage(`ChangePen ${mode} completed.`);
     appendConfigLog(`ChangePen ${mode} completed.`);
@@ -370,7 +370,7 @@ async function runChangePen() {
 async function runReset() {
   appendConfigLog("Resetting distance stats...");
   try {
-    await apiPostJson("/api/reset", { clearUploadedSvg: false });
+    await apiPostJson("/api/config/reset", { clearUploadedSvg: false });
     showConfigMessage("Distance reset completed.");
     appendConfigLog("Distance reset completed.");
   } catch (error) {
@@ -388,7 +388,7 @@ async function setPenMaxDistance() {
   }
   appendConfigLog(`Updating pen max distance to ${rawValue}m...`);
   try {
-    await apiPostJson("/api/pen-max-distance", { meters: Number(rawValue) });
+    await apiPostJson("/api/config/pen-max-distance", { meters: Number(rawValue) });
     persistPrintSettings();
     showConfigMessage("Pen max distance updated.");
     appendConfigLog(`Pen max distance updated to ${rawValue}m.`);
@@ -483,7 +483,7 @@ async function applyScannerManualConfig(options = {}) {
     payload.quad_points = quadPointsPx;
   }
 
-  const responseData = await apiPostJson("/api/scanner/manual-config", payload);
+  const responseData = await apiPostJson("/api/config/scanner/manual-config", payload);
   rememberAppliedQuadPoints(responseData, quadPointsPx);
   return { responseData, payload };
 }
@@ -570,7 +570,7 @@ function buildStreamUrl() {
   const capture = readCaptureSettingsForm();
   const params = new URLSearchParams();
   params.set("fisheye", capture.streamFisheye ? "1" : "0");
-  return `/api/scanner/stream.mjpg?${params.toString()}`;
+  return `/api/config/scanner/stream.mjpg?${params.toString()}`;
 }
 
 function showStreamInline() {
@@ -609,7 +609,7 @@ function adjustManualFocus(delta) {
   showConfigMessage(`Manual focus updated: ${next}.`);
   const direction = delta >= 0 ? "+" : "-";
   const step = Math.abs(delta);
-  void apiPostJson("/api/scanner/focus-adjust", { direction, step })
+  void apiPostJson("/api/config/scanner/focus-adjust", { direction, step })
     .then(() => {
       const autofocusMode = isAutofocusEnabled() ? "enabled" : "disabled";
       showConfigMessage(`Focus adjusted (${direction}${step}) and synced (autofocus ${autofocusMode}).`);

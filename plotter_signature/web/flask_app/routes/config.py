@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+from flask import Flask
+
+
+def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) -> None:
+    app.add_url_rule("/api/config", endpoint="config_runtime", view_func=handlers["config"], methods=["GET"])
+    app.add_url_rule(
+        "/api/config/serial-ports",
+        endpoint="config_serial_ports",
+        view_func=handlers["serial_ports"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/serial-port-check",
+        endpoint="config_serial_port_check",
+        view_func=handlers["serial_port_check"],
+        methods=["GET"],
+    )
+    app.add_url_rule("/api/config/connect", endpoint="config_connect", view_func=handlers["connect"], methods=["POST"])
+    app.add_url_rule(
+        "/api/config/disconnect",
+        endpoint="config_disconnect",
+        view_func=handlers["disconnect"],
+        methods=["POST"],
+    )
+    app.add_url_rule("/api/config/upload", endpoint="config_upload", view_func=handlers["upload_svg"], methods=["POST"])
+    app.add_url_rule(
+        "/api/config/change-pen/start",
+        endpoint="config_change_pen_start",
+        view_func=handlers["change_pen_start"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/change-pen/finish",
+        endpoint="config_change_pen_finish",
+        view_func=handlers["change_pen_finish"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/change-pen",
+        endpoint="config_change_pen",
+        view_func=handlers["change_pen"],
+        methods=["POST"],
+    )
+    app.add_url_rule("/api/config/reset", endpoint="config_reset", view_func=handlers["reset"], methods=["POST"])
+    app.add_url_rule(
+        "/api/config/pen-max-distance",
+        endpoint="config_pen_max_distance",
+        view_func=handlers["set_pen_max_distance"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/capture/request",
+        endpoint="config_capture_request",
+        view_func=handlers["request_capture"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/capture",
+        endpoint="config_capture",
+        view_func=handlers["capture_upload"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/capture/latest",
+        endpoint="config_capture_latest",
+        view_func=handlers["capture_latest"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/capture/latest/image",
+        endpoint="config_capture_latest_image",
+        view_func=handlers["capture_latest_image"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/stream.mjpg",
+        endpoint="config_scanner_stream",
+        view_func=handlers["scanner_stream_proxy"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/manual-config",
+        endpoint="config_scanner_manual_config",
+        view_func=handlers["scanner_manual_config"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/focus-adjust",
+        endpoint="config_scanner_focus_adjust",
+        view_func=handlers["scanner_focus_adjust"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/capture/start",
+        endpoint="config_scanner_capture_start",
+        view_func=handlers["scanner_capture_start"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/capture/<string:capture_id>/status",
+        endpoint="config_scanner_capture_status",
+        view_func=handlers["scanner_capture_status"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/capture/<string:capture_id>/result",
+        endpoint="config_scanner_capture_result",
+        view_func=handlers["scanner_capture_result"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/scanner/capture-manual",
+        endpoint="config_scanner_capture_manual",
+        view_func=handlers["scanner_capture_manual"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/api/config/requests/<string:request_id>",
+        endpoint="config_request_get",
+        view_func=handlers["get_request"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/requests",
+        endpoint="config_request_list",
+        view_func=handlers["list_requests"],
+        methods=["GET"],
+    )

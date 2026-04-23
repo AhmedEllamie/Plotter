@@ -102,6 +102,21 @@ All HTTP APIs require a shared API key:
 - Server: set `PLOTTER_API_KEY=<secret>`
 - Clients: send header `X-API-Key: <same-secret>`
 
+## API groups
+
+Flask endpoints are grouped under two namespaces:
+
+- `cmd` APIs: `/api/cmd/*`
+  - `GET /api/cmd/health`
+  - `GET /api/cmd/status`
+  - `POST /api/cmd/print`
+  - `POST /api/cmd/print/bulk`
+  - `POST /api/cmd/bulk/stop`
+  - `POST /api/cmd/void`
+- `config` APIs: `/api/config/*` for all remaining setup/configuration/scanner/capture/request routes.
+
+Legacy `/api/*` routes remain available for backward compatibility and now return deprecation headers.
+
 ## Configuration
 
 Optional defaults can be set in `appsettings.json` at the repo root:

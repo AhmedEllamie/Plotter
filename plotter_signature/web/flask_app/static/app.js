@@ -166,7 +166,7 @@ function renderStatusGui(status) {
 async function refreshStatus(options = {}) {
   const silent = Boolean(options.silent);
   try {
-    const status = await apiGet("/api/status");
+    const status = await apiGet("/api/cmd/status");
     renderStatusGui(status);
     if (!silent) {
       appendLog("Status refreshed.");
@@ -192,7 +192,7 @@ async function uploadSvgFromFile(file) {
   const formData = new FormData();
   formData.append("svg", file);
   try {
-    const data = await apiPostForm("/api/upload", formData);
+    const data = await apiPostForm("/api/config/upload", formData);
     state.uploadedSvgName = data.fileName;
     document.getElementById("uploadedSvgLabel").textContent = `Uploaded SVG: ${data.fileName}`;
     appendLog(`SVG uploaded (${data.fileName}).`);
@@ -206,7 +206,7 @@ async function printUploadedSvg() {
   try {
     const startedAt = new Date();
     appendLog(`Print started at ${formatTimestamp(startedAt)}.`);
-    const data = await apiPostJson("/api/print", payload);
+    const data = await apiPostJson("/api/cmd/print", payload);
     const completedAt = new Date();
     const svgName = data.svgFileName || state.uploadedSvgName || "unknown.svg";
     appendLog(
@@ -270,7 +270,7 @@ async function bulkPrintUploadedSvg() {
       const payload = { printRequest: buildPrintSettingsPayload() };
       const printStartedAt = new Date();
       appendLog(`Bulk ${index + 1}/${copies}: print started at ${formatTimestamp(printStartedAt)}.`);
-      const printData = await apiPostJson("/api/print", payload);
+      const printData = await apiPostJson("/api/cmd/print", payload);
       state.bulkPrintedCount = index + 1;
       updateBulkProgressLabel();
       const printCompletedAt = new Date();
@@ -300,7 +300,7 @@ async function stopBulkPrint() {
   }
   state.bulkStopRequested = true;
   try {
-    await apiPostJson("/api/print/bulk/stop");
+    await apiPostJson("/api/cmd/bulk/stop");
   } catch (error) {
     // Frontend bulk flow can still stop at the next loop boundary.
     appendLog(`Stop request warning: ${error.message}`, true);
@@ -310,7 +310,7 @@ async function stopBulkPrint() {
 
 async function runVoid() {
   try {
-    await apiPostJson("/api/void");
+    await apiPostJson("/api/cmd/void");
     appendLog("Void completed.");
     await refreshStatus();
   } catch (error) {
@@ -319,7 +319,7 @@ async function runVoid() {
 }
 
 async function loadLatestCapture() {
-  const response = await apiFetch("/api/capture/latest", { method: "GET" });
+  const response = await apiFetch("/api/config/capture/latest", { method: "GET" });
   if (response.status === 404) {
     return false;
   }
@@ -392,7 +392,7 @@ async function toggleCaptureFullscreen() {
 }
 
 async function requestCaptureAndThrow() {
-  const startData = await apiPostJson("/api/scanner/capture/start", {
+  const startData = await apiPostJson("/api/config/scanner/capture/start", {
     readability_required: true,
     timeout_seconds: 15,
   });
@@ -404,7 +404,7 @@ async function requestCaptureAndThrow() {
   const maxAttempts = 50;
   let latestStatus = "";
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const statusData = await apiGet(`/api/scanner/capture/${encodeURIComponent(captureId)}/status`);
+    const statusData = await apiGet(`/api/config/scanner/capture/${encodeURIComponent(captureId)}/status`);
     latestStatus = String(statusData.capture?.status || "").toLowerCase();
     if (latestStatus === "succeeded") {
       break;
@@ -419,7 +419,7 @@ async function requestCaptureAndThrow() {
     throw new Error("Capture status polling timed out.");
   }
 
-  const imageUrl = `/api/scanner/capture/${encodeURIComponent(captureId)}/result`;
+  const imageUrl = `/api/config/scanner/capture/${encodeURIComponent(captureId)}/result`;
   const imageEl = document.getElementById("capturePreview");
   imageEl.src = `${imageUrl}?t=${Date.now()}`;
   imageEl.style.display = "block";

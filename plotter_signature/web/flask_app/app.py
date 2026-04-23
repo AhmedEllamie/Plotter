@@ -29,6 +29,7 @@ from plotter_signature.web.flask_app.config import (
     load_scanner_service_settings,
 )
 from plotter_signature.web.flask_app.response import api_error, api_success
+from plotter_signature.web.flask_app.routes import register_cmd_routes, register_config_routes
 from plotter_signature.web.flask_app.state import RuntimeState
 
 
@@ -287,6 +288,16 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             error_code="UNAUTHORIZED",
             status_code=401,
         )
+
+    @app.after_request
+    def append_legacy_route_warning(response: Response) -> Response:
+        path = request.path
+        if path.startswith("/api/") and not path.startswith("/api/cmd/") and not path.startswith("/api/config/"):
+            response.headers["Deprecation"] = "true"
+            response.headers["Warning"] = (
+                '299 - "Legacy API path is deprecated. Use grouped routes under /api/cmd/* or /api/config/*."'
+            )
+        return response
 
     def _merge_scanner_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
         merged = dict(payload)
@@ -1190,6 +1201,41 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Recent request logs loaded.",
             data=[entry.to_dict() for entry in logs],
         )
+
+    handlers = {
+        "health": health,
+        "config": config,
+        "scanner_stream_proxy": scanner_stream_proxy,
+        "scanner_manual_config": scanner_manual_config,
+        "scanner_focus_adjust": scanner_focus_adjust,
+        "scanner_capture_start": scanner_capture_start,
+        "scanner_capture_status": scanner_capture_status,
+        "scanner_capture_result": scanner_capture_result,
+        "serial_ports": serial_ports,
+        "serial_port_check": serial_port_check,
+        "connect": connect,
+        "disconnect": disconnect,
+        "status": status,
+        "upload_svg": upload_svg,
+        "print_svg": print_svg,
+        "bulk_print_svg": bulk_print_svg,
+        "stop_bulk_print": stop_bulk_print,
+        "void_print": void_print,
+        "change_pen_start": change_pen_start,
+        "change_pen_finish": change_pen_finish,
+        "change_pen": change_pen,
+        "reset": reset,
+        "set_pen_max_distance": set_pen_max_distance,
+        "request_capture": request_capture,
+        "scanner_capture_manual": scanner_capture_manual,
+        "capture_upload": capture_upload,
+        "capture_latest": capture_latest,
+        "capture_latest_image": capture_latest_image,
+        "get_request": get_request,
+        "list_requests": list_requests,
+    }
+    register_cmd_routes(app, handlers)
+    register_config_routes(app, handlers)
 
     return app
 
