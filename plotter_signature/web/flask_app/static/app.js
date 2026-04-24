@@ -392,9 +392,10 @@ async function toggleCaptureFullscreen() {
 }
 
 async function requestCaptureAndThrow() {
+  const capture = loadCaptureSettings();
   const data = await apiPostJson("/api/config/scanner/capture/oneshot", {
-    autofocus_enabled: false,
-    manual_focus_value: 35,
+    autofocus_enabled: Boolean(capture.autofocusEnabled),
+    manual_focus_value: Number(capture.manualFocusValue || 35),
   });
   const imageUrl = String(data.imageUrl || "/api/config/capture/latest/image");
   const imageEl = document.getElementById("capturePreview");

@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+from pathlib import Path
 import re
 import sys
 import threading
@@ -262,6 +263,128 @@ def _scanner_request_bytes(scanner_settings: ScannerServiceSettings, path: str) 
         )
 
 
+def _default_ui_profile_path() -> Path:
+    override = (os.getenv("PLOTTER_UI_PROFILE_PATH") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    app_data_dir = (os.getenv("APPDATA") or "").strip()
+    if app_data_dir:
+        return Path(app_data_dir) / "plotter-signature" / "ui-profile.json"
+    return Path.home() / ".plotter-signature" / "ui-profile.json"
+
+
+def _default_ui_profile_data() -> dict[str, Any]:
+    return {
+        "print": {
+            "width": "210mm",
+            "height": "297mm",
+            "xPosition": "50mm",
+            "yPosition": "50mm",
+            "scale": 1,
+            "rotation": 0,
+            "invertX": False,
+            "invertY": True,
+        },
+        "capture": {
+            "autofocus_enabled": False,
+            "manual_focus_value": 35,
+            "quad_points": [],
+        },
+        "updatedAt": None,
+    }
+
+
+def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
+    defaults = _default_ui_profile_data()
+    print_payload = payload.get("print")
+    capture_payload = payload.get("capture")
+    print_data = dict(defaults["print"])
+    capture_data = dict(defaults["capture"])
+
+    if isinstance(print_payload, dict):
+        for key in ("width", "height", "xPosition", "yPosition"):
+            value = print_payload.get(key)
+            if isinstance(value, str) and value.strip():
+                print_data[key] = value.strip()
+        for key in ("scale", "rotation"):
+            raw_value = print_payload.get(key)
+            if raw_value is None or raw_value == "":
+                continue
+            try:
+                print_data[key] = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+        for key in ("invertX", "invertY"):
+            if key in print_payload:
+                print_data[key] = bool(print_payload.get(key))
+
+    if isinstance(capture_payload, dict):
+        raw_autofocus = (
+            capture_payload.get("autofocus_enabled")
+            if "autofocus_enabled" in capture_payload
+            else capture_payload.get("autofocusEnabled")
+        )
+        if raw_autofocus is not None:
+            capture_data["autofocus_enabled"] = bool(raw_autofocus)
+
+        raw_focus = (
+            capture_payload.get("manual_focus_value")
+            if "manual_focus_value" in capture_payload
+            else capture_payload.get("manualFocusValue")
+        )
+        try:
+            focus_value = int(float(raw_focus))
+            capture_data["manual_focus_value"] = max(0, min(255, focus_value))
+        except (TypeError, ValueError):
+            pass
+
+        raw_points = (
+            capture_payload.get("quad_points")
+            if "quad_points" in capture_payload
+            else capture_payload.get("quadPoints")
+        )
+        sanitized_points: list[list[int]] = []
+        if isinstance(raw_points, list):
+            for point in raw_points:
+                if not isinstance(point, (list, tuple)) or len(point) != 2:
+                    continue
+                try:
+                    x_value = int(round(float(point[0])))
+                    y_value = int(round(float(point[1])))
+                except (TypeError, ValueError):
+                    continue
+                sanitized_points.append([x_value, y_value])
+        capture_data["quad_points"] = sanitized_points[:4]
+
+    return {
+        "print": print_data,
+        "capture": capture_data,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _load_ui_profile_data(file_path: Path) -> dict[str, Any]:
+    defaults = _default_ui_profile_data()
+    if not file_path.exists():
+        return defaults
+    try:
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception:
+        return defaults
+    if not isinstance(payload, dict):
+        return defaults
+    return _sanitize_ui_profile_data(payload)
+
+
+def _save_ui_profile_data(file_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    sanitized = _sanitize_ui_profile_data(payload)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = file_path.with_suffix(f"{file_path.suffix}.tmp")
+    temp_path.write_text(json.dumps(sanitized, ensure_ascii=True, indent=2), encoding="utf-8")
+    temp_path.replace(file_path)
+    return sanitized
+
+
 def create_app(provider: ServiceProvider | None = None) -> Flask:
     provider = provider or get_service_provider()
     capture_settings = load_capture_settings()
@@ -270,9 +393,28 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     last_scanner_manual_config: dict[str, Any] = {}
     capture_jobs_lock = threading.Lock()
     capture_jobs: dict[str, dict[str, Any]] = {}
+    ui_profile_lock = threading.Lock()
+    ui_profile_path = _default_ui_profile_path()
+    ui_profile_exists = ui_profile_path.exists()
+    ui_profile_data = _load_ui_profile_data(ui_profile_path)
     api_auth_cookie_name = "plotter_api_auth"
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+    # Seed scanner manual config cache from persisted profile so oneshot capture can
+    # still run even if startup bootstrap apply was skipped/failed.
+    capture_profile = ui_profile_data.get("capture")
+    if isinstance(capture_profile, dict):
+        seeded_quad_points = capture_profile.get("quad_points")
+        if isinstance(seeded_quad_points, list) and len(seeded_quad_points) == 4:
+            last_scanner_manual_config["quad_points"] = seeded_quad_points
+        if "autofocus_enabled" in capture_profile:
+            last_scanner_manual_config["autofocus_enabled"] = bool(capture_profile.get("autofocus_enabled"))
+        if "manual_focus_value" in capture_profile:
+            try:
+                last_scanner_manual_config["manual_focus_value"] = float(capture_profile.get("manual_focus_value"))
+            except (TypeError, ValueError):
+                pass
 
     @app.before_request
     def require_api_key_for_api_routes() -> tuple[Response, int] | None:
@@ -396,6 +538,29 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if manual_config_response.get("ok") is False:
             raise RuntimeError(manual_config_response.get("message") or "Scanner manual config failed.")
         return manual_config_response
+
+    def _bootstrap_scanner_config_from_profile() -> None:
+        if not ui_profile_exists:
+            return
+        capture_profile = ui_profile_data.get("capture")
+        if not isinstance(capture_profile, dict):
+            return
+        quad_points = capture_profile.get("quad_points")
+        if not isinstance(quad_points, list) or len(quad_points) != 4:
+            return
+        payload = {
+            "autofocus_enabled": bool(capture_profile.get("autofocus_enabled", False)),
+            "manual_focus_value": float(capture_profile.get("manual_focus_value", 35)),
+            "quad_points": quad_points,
+        }
+        try:
+            response = _apply_scanner_session_config(payload, require_quad_points=True)
+            _remember_scanner_manual_config(payload, response)
+            app.logger.info("Applied scanner focus and quad points from persisted UI profile.")
+        except Exception as ex:
+            app.logger.warning("Startup scanner config apply skipped: %s", ex)
+
+    _bootstrap_scanner_config_from_profile()
 
     def _capture_job_snapshot(job_id: str) -> dict[str, Any]:
         with capture_jobs_lock:
@@ -546,6 +711,40 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 "scannerServiceBaseUrl": scanner_settings.base_url,
             },
         )
+
+    @app.get("/api/config/ui-profile")
+    def get_ui_profile() -> tuple[Response, int]:
+        with ui_profile_lock:
+            return api_success(message="UI profile loaded.", data=dict(ui_profile_data))
+
+    @app.post("/api/config/ui-profile")
+    def save_ui_profile() -> tuple[Response, int]:
+        payload = _get_json_dict()
+        if not payload:
+            return api_error("UI profile payload is required.", error_code="UI_PROFILE_REQUIRED", status_code=400)
+        try:
+            saved_profile = _save_ui_profile_data(ui_profile_path, payload)
+        except Exception as ex:
+            return api_error(
+                f"Failed to save UI profile: {ex}",
+                error_code="UI_PROFILE_SAVE_FAILED",
+                status_code=500,
+            )
+        with ui_profile_lock:
+            ui_profile_data.clear()
+            ui_profile_data.update(saved_profile)
+            saved_capture = saved_profile.get("capture")
+            if isinstance(saved_capture, dict):
+                if isinstance(saved_capture.get("quad_points"), list):
+                    last_scanner_manual_config["quad_points"] = saved_capture.get("quad_points")
+                if "autofocus_enabled" in saved_capture:
+                    last_scanner_manual_config["autofocus_enabled"] = bool(saved_capture.get("autofocus_enabled"))
+                if "manual_focus_value" in saved_capture:
+                    try:
+                        last_scanner_manual_config["manual_focus_value"] = float(saved_capture.get("manual_focus_value"))
+                    except (TypeError, ValueError):
+                        pass
+            return api_success(message="UI profile saved.", data=dict(ui_profile_data))
 
     @app.get("/api/config/scanner/stream.mjpg")
     def scanner_stream_proxy() -> Response | tuple[Response, int]:

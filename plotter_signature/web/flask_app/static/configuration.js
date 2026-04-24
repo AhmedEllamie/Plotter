@@ -14,6 +14,9 @@ const uiState = {
   focusSyncInFlight: false,
   focusSyncQueued: false,
   lastAppliedQuadPointsPx: null,
+  profileSaveTimer: null,
+  profileSaveInFlight: false,
+  profileSaveQueued: false,
 };
 const MAX_CONFIG_LOG_LINES = 100;
 
@@ -266,10 +269,119 @@ function getApiKey() {
 
 function persistPrintSettings() {
   savePrintSettings(readPrintSettingsForm());
+  queueServerUiProfileSave();
 }
 
 function persistCaptureSettings() {
   saveCaptureSettings(readCaptureSettingsForm());
+  queueServerUiProfileSave();
+}
+
+function buildServerUiProfilePayload() {
+  const print = readPrintSettingsForm();
+  const capture = readCaptureSettingsForm();
+  const cachedQuadPointsPx = Array.isArray(uiState.lastAppliedQuadPointsPx)
+    ? uiState.lastAppliedQuadPointsPx.map((point) => [Number(point[0]), Number(point[1])])
+    : [];
+  const computedQuadPointsPx = buildQuadPointsPxFromCapture(capture, { requireQuadPoints: false });
+  const quadPointsPx = Array.isArray(cachedQuadPointsPx) && cachedQuadPointsPx.length === REQUIRED_QUAD_POINTS
+    ? cachedQuadPointsPx
+    : (Array.isArray(computedQuadPointsPx) ? computedQuadPointsPx : []);
+  return {
+    print: {
+      width: String(print.width || "").trim(),
+      height: String(print.height || "").trim(),
+      xPosition: String(print.xPosition || "").trim(),
+      yPosition: String(print.yPosition || "").trim(),
+      scale: Number(print.scale || 1),
+      rotation: Number(print.rotation || 0),
+      invertX: Boolean(print.invertX),
+      invertY: Boolean(print.invertY),
+    },
+    capture: {
+      autofocus_enabled: Boolean(capture.autofocusEnabled),
+      manual_focus_value: Number(capture.manualFocusValue || 35),
+      quad_points: quadPointsPx,
+    },
+  };
+}
+
+function applyServerUiProfile(profile) {
+  if (!profile || typeof profile !== "object") {
+    return;
+  }
+  const print = typeof profile.print === "object" && profile.print !== null ? profile.print : {};
+  const capture = typeof profile.capture === "object" && profile.capture !== null ? profile.capture : {};
+
+  if (typeof print.width === "string") document.getElementById("width").value = print.width;
+  if (typeof print.height === "string") document.getElementById("height").value = print.height;
+  if (typeof print.xPosition === "string") document.getElementById("xPosition").value = print.xPosition;
+  if (typeof print.yPosition === "string") document.getElementById("yPosition").value = print.yPosition;
+  if (Number.isFinite(Number(print.scale))) document.getElementById("scale").value = Number(print.scale);
+  if (Number.isFinite(Number(print.rotation))) document.getElementById("rotation").value = Number(print.rotation);
+  if (typeof print.invertX !== "undefined") document.getElementById("invertX").checked = Boolean(print.invertX);
+  if (typeof print.invertY !== "undefined") document.getElementById("invertY").checked = Boolean(print.invertY);
+
+  const autofocusEnabled = typeof capture.autofocus_enabled !== "undefined"
+    ? capture.autofocus_enabled
+    : capture.autofocusEnabled;
+  if (typeof autofocusEnabled !== "undefined") {
+    setAutofocusEnabled(Boolean(autofocusEnabled));
+  }
+  const manualFocusValue = Number.isFinite(Number(capture.manual_focus_value))
+    ? capture.manual_focus_value
+    : capture.manualFocusValue;
+  if (Number.isFinite(Number(manualFocusValue))) {
+    document.getElementById("manualFocusValue").value = clamp(Number(manualFocusValue), MIN_FOCUS_VALUE, MAX_FOCUS_VALUE);
+  }
+  const quadPointsPx = Array.isArray(capture.quad_points) ? capture.quad_points : [];
+  if (quadPointsPx.length === REQUIRED_QUAD_POINTS) {
+    uiState.lastAppliedQuadPointsPx = quadPointsPx
+      .filter((point) => Array.isArray(point) && point.length === 2)
+      .map((point) => [Number(point[0]), Number(point[1])])
+      .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+  }
+
+  persistPrintSettings();
+  persistCaptureSettings();
+  renderFocusLabel();
+  renderFocusMode();
+  renderQuadPoints();
+}
+
+async function loadServerUiProfile() {
+  const profile = await apiGet("/api/config/ui-profile");
+  applyServerUiProfile(profile);
+}
+
+function queueServerUiProfileSave() {
+  if (uiState.profileSaveTimer) {
+    clearTimeout(uiState.profileSaveTimer);
+  }
+  uiState.profileSaveTimer = setTimeout(() => {
+    uiState.profileSaveTimer = null;
+    void flushServerUiProfileSave();
+  }, 500);
+}
+
+async function flushServerUiProfileSave() {
+  if (uiState.profileSaveInFlight) {
+    uiState.profileSaveQueued = true;
+    return;
+  }
+  uiState.profileSaveInFlight = true;
+  const payload = buildServerUiProfilePayload();
+  try {
+    await apiPostJson("/api/config/ui-profile", payload);
+  } catch (error) {
+    appendConfigLog(`UI profile save failed: ${error.message}`, true);
+  } finally {
+    uiState.profileSaveInFlight = false;
+    if (uiState.profileSaveQueued) {
+      uiState.profileSaveQueued = false;
+      void flushServerUiProfileSave();
+    }
+  }
 }
 
 async function scanSerialPorts() {
@@ -684,6 +796,7 @@ async function sendScannerConfig() {
   appendConfigLog("Sending scanner config...");
   try {
     const { payload } = await applyScannerManualConfig({ requireQuadPoints: true });
+    await flushServerUiProfileSave();
     showConfigMessage(`Scanner config sent successfully.\nPayload:\n${JSON.stringify(payload, null, 2)}`);
     appendConfigLog("Scanner config sent successfully.");
   } catch (error) {
@@ -745,8 +858,14 @@ function registerActions() {
   });
 }
 
-function initConfigurationPage() {
+async function initConfigurationPage() {
   hydrateConfiguration();
+  try {
+    await loadServerUiProfile();
+    appendConfigLog("Loaded configuration profile from server.");
+  } catch (error) {
+    appendConfigLog(`Server profile load failed, using local settings: ${error.message}`, true);
+  }
   registerPersistenceListeners();
   registerActions();
   showConfigMessage("Settings are saved automatically in this browser.");
@@ -755,4 +874,4 @@ function initConfigurationPage() {
   void refreshTtyPortStatus();
 }
 
-initConfigurationPage();
+void initConfigurationPage();

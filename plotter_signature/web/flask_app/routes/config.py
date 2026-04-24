@@ -9,6 +9,18 @@ from flask import Flask
 def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) -> None:
     app.add_url_rule("/api/config", endpoint="config_runtime", view_func=handlers["config"], methods=["GET"])
     app.add_url_rule(
+        "/api/config/ui-profile",
+        endpoint="config_ui_profile_get",
+        view_func=handlers["get_ui_profile"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/config/ui-profile",
+        endpoint="config_ui_profile_save",
+        view_func=handlers["save_ui_profile"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/api/config/serial-ports",
         endpoint="config_serial_ports",
         view_func=handlers["serial_ports"],
