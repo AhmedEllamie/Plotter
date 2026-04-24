@@ -17,11 +17,15 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
-from flask import Flask, Response, request, send_file, send_from_directory
+from flask import Flask, Response, g, request, send_file, send_from_directory
 
 from plotter_signature.dependency_injection import ServiceProvider, get_service_provider
 from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool
-from plotter_signature.infrastructure.security.api_key_auth import validate_api_key
+from plotter_signature.infrastructure.security.api_key_auth import (
+    API_KEY_HEADER,
+    get_configured_api_key,
+    validate_api_key,
+)
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 from plotter_signature.web.flask_app.config import (
     FlaskCaptureSettings,
@@ -30,7 +34,6 @@ from plotter_signature.web.flask_app.config import (
     load_scanner_service_settings,
 )
 from plotter_signature.web.flask_app.response import api_error, api_success
-from plotter_signature.web.flask_app.routes import register_cmd_routes, register_config_routes
 from plotter_signature.web.flask_app.state import RuntimeState
 
 
@@ -55,7 +58,7 @@ def _parse_optional_int(value: Any) -> int | None:
 
 def _ensure_connected(provider: ServiceProvider) -> None:
     if not provider.printer_service.is_open:
-        raise RuntimeError("Printer is not connected. Call POST /api/connect first.")
+        raise RuntimeError("Printer is not connected. Call POST /api/config/connect first.")
 
 
 def _ensure_not_busy(provider: ServiceProvider) -> None:
@@ -267,6 +270,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     last_scanner_manual_config: dict[str, Any] = {}
     capture_jobs_lock = threading.Lock()
     capture_jobs: dict[str, dict[str, Any]] = {}
+    api_auth_cookie_name = "plotter_api_auth"
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -275,8 +279,15 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not request.path.startswith("/api/"):
             return None
 
-        validation = validate_api_key(request.headers.get("X-API-Key"))
+        header_api_key = (request.headers.get(API_KEY_HEADER) or "").strip()
+        cookie_api_key = (request.cookies.get(api_auth_cookie_name) or "").strip()
+        provided_api_key = header_api_key or cookie_api_key
+        validation = validate_api_key(provided_api_key)
         if validation.is_valid:
+            # If a request came with a valid header key, persist auth for browser subresource
+            # requests (like <img src="/api/config/scanner/stream.mjpg">) that cannot send
+            # custom headers.
+            g.issue_api_auth_cookie = bool(header_api_key)
             return None
 
         if not validation.is_server_configured:
@@ -293,12 +304,16 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         )
 
     @app.after_request
-    def append_legacy_route_warning(response: Response) -> Response:
-        path = request.path
-        if path.startswith("/api/") and not path.startswith("/api/cmd/") and not path.startswith("/api/config/"):
-            response.headers["Deprecation"] = "true"
-            response.headers["Warning"] = (
-                '299 - "Legacy API path is deprecated. Use grouped routes under /api/cmd/* or /api/config/*."'
+    def issue_api_auth_cookie(response: Response) -> Response:
+        if bool(getattr(g, "issue_api_auth_cookie", False)):
+            response.set_cookie(
+                key=api_auth_cookie_name,
+                value=get_configured_api_key(),
+                max_age=60 * 60 * 24 * 7,
+                httponly=True,
+                samesite="Lax",
+                secure=False,
+                path="/",
             )
         return response
 
@@ -507,7 +522,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_success(message="Plotter Signature Flask API")[0]
         return send_from_directory(app.static_folder, "configuration.html")
 
-    @app.get("/api/health")
+    @app.get("/api/cmd/health")
     def health() -> tuple[Response, int]:
         return api_success(
             message="Service is healthy.",
@@ -532,7 +547,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             },
         )
 
-    @app.get("/api/scanner/stream.mjpg")
+    @app.get("/api/config/scanner/stream.mjpg")
     def scanner_stream_proxy() -> Response | tuple[Response, int]:
         fps = request.args.get("fps", "10")
         width = request.args.get("width", "0")
@@ -567,7 +582,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             direct_passthrough=True,
         )
 
-    @app.post("/api/scanner/manual-config")
+    @app.post("/api/config/scanner/manual-config")
     def scanner_manual_config() -> tuple[Response, int]:
         payload = _get_json_dict()
         if not payload:
@@ -595,7 +610,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_error(f"Manual config failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
         return api_success("Scanner manual config applied.", data=manual_config_response)
 
-    @app.post("/api/scanner/focus-adjust")
+    @app.post("/api/config/scanner/focus-adjust")
     def scanner_focus_adjust() -> tuple[Response, int]:
         payload = _get_json_dict()
         if not payload:
@@ -627,7 +642,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_error(f"Focus adjust failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
         return api_success("Scanner focus adjusted.", data=adjust_response)
 
-    @app.post("/api/scanner/capture/start")
+    @app.post("/api/config/scanner/capture/start")
     def scanner_capture_start() -> tuple[Response, int]:
         payload = _get_json_dict()
         request_payload = {
@@ -665,7 +680,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_error(f"Capture start failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
         return api_success("Scanner capture started.", data={"captureId": capture_id, "capture": capture})
 
-    @app.get("/api/scanner/capture/<string:capture_id>/status")
+    @app.get("/api/config/scanner/capture/<string:capture_id>/status")
     def scanner_capture_status(capture_id: str) -> tuple[Response, int]:
         capture_id = capture_id.strip()
         if not capture_id:
@@ -695,7 +710,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_error(f"Capture status failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
         return api_success("Scanner capture status loaded.", data={"captureId": capture_id, "capture": capture})
 
-    @app.get("/api/scanner/capture/<string:capture_id>/result")
+    @app.get("/api/config/scanner/capture/<string:capture_id>/result")
     def scanner_capture_result(capture_id: str) -> Response | tuple[Response, int]:
         capture_id = capture_id.strip()
         if not capture_id:
@@ -734,7 +749,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             max_age=0,
         )
 
-    @app.post("/api/scanner/capture/run")
+    @app.post("/api/config/scanner/capture/run")
     def scanner_capture_run() -> tuple[Response, int]:
         payload = _get_json_dict()
         readability_required = bool(payload.get("readability_required", True))
@@ -773,7 +788,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             status_code=202,
         )
 
-    @app.get("/api/scanner/capture/run/<string:job_id>")
+    @app.get("/api/config/scanner/capture/run/<string:job_id>")
     def scanner_capture_run_status(job_id: str) -> tuple[Response, int]:
         job_id = job_id.strip()
         if not job_id:
@@ -784,7 +799,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_error("Capture job not found.", error_code="CAPTURE_JOB_NOT_FOUND", status_code=404)
         return api_success("Capture orchestration status loaded.", data=snapshot)
 
-    @app.get("/api/serial-ports")
+    @app.get("/api/config/serial-ports")
     def serial_ports() -> tuple[Response, int]:
         try:
             from serial.tools import list_ports
@@ -839,7 +854,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success(message="Serial ports listed.", data={"ports": entries})
 
-    @app.get("/api/serial-port-check")
+    @app.get("/api/config/serial-port-check")
     def serial_port_check() -> tuple[Response, int]:
         device = str(request.args.get("device", "")).strip()
         if not device:
@@ -868,7 +883,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             },
         )
 
-    @app.post("/api/connect")
+    @app.post("/api/config/connect")
     def connect() -> tuple[Response, int]:
         if provider.printer_service.is_open:
             return api_error(
@@ -899,7 +914,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data=asdict(provider.printer_service.get_status()),
         )
 
-    @app.post("/api/disconnect")
+    @app.post("/api/config/disconnect")
     def disconnect() -> tuple[Response, int]:
         if not provider.printer_service.is_open:
             return api_error("Printer is not connected.", error_code="NOT_CONNECTED", status_code=409)
@@ -913,12 +928,12 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         provider.printer_service.close_port()
         return api_success("Disconnected from printer.", data=asdict(provider.printer_service.get_status()))
 
-    @app.get("/api/status")
+    @app.get("/api/cmd/status")
     def status() -> tuple[Response, int]:
         status_model = provider.printer_service.get_status()
         return api_success(message="Printer status loaded.", data=asdict(status_model))
 
-    @app.post("/api/upload")
+    @app.post("/api/config/upload")
     def upload_svg() -> tuple[Response, int]:
         upload = request.files.get("svg") or request.files.get("file")
         if upload is None:
@@ -939,7 +954,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             status_code=201,
         )
 
-    @app.post("/api/print")
+    @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
@@ -958,7 +973,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             uploaded = runtime_state.get_uploaded_svg()
             if uploaded is None:
                 return api_error(
-                    "No uploaded SVG found. Call POST /api/upload first.",
+                    "No uploaded SVG found. Call POST /api/config/upload first.",
                     error_code="SVG_NOT_UPLOADED",
                     status_code=400,
                 )
@@ -986,7 +1001,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             },
         )
 
-    @app.post("/api/print/bulk")
+    @app.post("/api/cmd/print/bulk")
     def bulk_print_svg() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
@@ -1005,7 +1020,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             uploaded = runtime_state.get_uploaded_svg()
             if uploaded is None:
                 return api_error(
-                    "No uploaded SVG found. Call POST /api/upload first.",
+                    "No uploaded SVG found. Call POST /api/config/upload first.",
                     error_code="SVG_NOT_UPLOADED",
                     status_code=400,
                 )
@@ -1040,7 +1055,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             },
         )
 
-    @app.post("/api/print/bulk/stop")
+    @app.post("/api/cmd/bulk/stop")
     def stop_bulk_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
@@ -1058,7 +1073,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data={"status": asdict(provider.printer_service.get_status())},
         )
 
-    @app.post("/api/void")
+    @app.post("/api/cmd/void")
     def void_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
@@ -1071,7 +1086,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success("Void print completed.", data=asdict(result))
 
-    @app.post("/api/change-pen/start")
+    @app.post("/api/config/change-pen/start")
     def change_pen_start() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
@@ -1084,7 +1099,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success("Pen change start completed.", data=asdict(result))
 
-    @app.post("/api/change-pen/finish")
+    @app.post("/api/config/change-pen/finish")
     def change_pen_finish() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
@@ -1101,7 +1116,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success("Pen change finish completed.", data=asdict(result))
 
-    @app.post("/api/change-pen")
+    @app.post("/api/config/change-pen")
     def change_pen() -> tuple[Response, int]:
         payload = _get_json_dict() or request.form.to_dict(flat=True)
         mode = str(payload.get("mode", "start")).strip().lower()
@@ -1115,7 +1130,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return change_pen_start()
         return change_pen_finish()
 
-    @app.post("/api/reset")
+    @app.post("/api/config/reset")
     def reset() -> tuple[Response, int]:
         if provider.printer_service.is_printing:
             return api_error(
@@ -1147,7 +1162,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             },
         )
 
-    @app.post("/api/pen-max-distance")
+    @app.post("/api/config/pen-max-distance")
     def set_pen_max_distance() -> tuple[Response, int]:
         payload = _get_json_dict() or request.form.to_dict(flat=True)
         raw_meters = payload.get("meters") or payload.get("maxPenDistanceM")
@@ -1173,7 +1188,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data={"stats": stats},
         )
 
-    @app.post("/api/capture/request")
+    @app.post("/api/config/capture/request")
     def request_capture() -> tuple[Response, int]:
         payload = _get_json_dict()
         try:
@@ -1199,7 +1214,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success("Capture reset command sent.", data=response_payload)
 
-    @app.post("/api/scanner/capture-manual")
+    @app.post("/api/config/scanner/capture-manual")
     def scanner_capture_manual() -> tuple[Response, int]:
         payload = _get_json_dict()
         if not payload:
@@ -1266,7 +1281,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         model = runtime_state.set_captured_image(
             file_name=f"rectified-{capture_id}.png",
             content_type=content_type,
-            payload=image_payload,
+            content=image_payload,
         )
         return api_success(
             message="Manual scanner capture completed.",
@@ -1275,11 +1290,15 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 "fileName": model.file_name,
                 "contentType": model.content_type,
                 "capturedAt": _to_iso8601_utc(model.captured_at),
-                "imageUrl": "/api/capture/latest/image",
+                "imageUrl": "/api/config/capture/latest/image",
             },
         )
 
-    @app.post("/api/capture")
+    @app.post("/api/config/scanner/capture/oneshot")
+    def scanner_capture_oneshot() -> tuple[Response, int]:
+        return scanner_capture_manual()
+
+    @app.post("/api/config/capture")
     def capture_upload() -> tuple[Response, int]:
         try:
             file_name, content_type, payload = _extract_capture_image_payload()
@@ -1296,12 +1315,12 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 "contentType": model.content_type,
                 "sizeBytes": len(model.content),
                 "capturedAt": _to_iso8601_utc(model.captured_at),
-                "imageUrl": "/api/capture/latest/image",
+                "imageUrl": "/api/config/capture/latest/image",
             },
             status_code=201,
         )
 
-    @app.get("/api/capture/latest")
+    @app.get("/api/config/capture/latest")
     def capture_latest() -> tuple[Response, int]:
         model = runtime_state.get_captured_image()
         if model is None:
@@ -1313,7 +1332,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             "contentType": model.content_type,
             "sizeBytes": len(model.content),
             "capturedAt": _to_iso8601_utc(model.captured_at),
-            "imageUrl": "/api/capture/latest/image",
+            "imageUrl": "/api/config/capture/latest/image",
         }
         if include_data_uri:
             encoded = base64.b64encode(model.content).decode("ascii")
@@ -1321,7 +1340,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success(message="Latest captured image loaded.", data=data)
 
-    @app.get("/api/capture/latest/image")
+    @app.get("/api/config/capture/latest/image")
     def capture_latest_image() -> Response | tuple[Response, int]:
         model = runtime_state.get_captured_image()
         if model is None:
@@ -1335,7 +1354,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             max_age=0,
         )
 
-    @app.get("/api/requests/<string:request_id>")
+    @app.get("/api/config/requests/<string:request_id>")
     def get_request(request_id: str) -> tuple[Response, int]:
         try:
             request_uuid = UUID(request_id)
@@ -1351,7 +1370,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             )
         return api_success(message="Request log loaded.", data=log.to_dict())
 
-    @app.get("/api/requests")
+    @app.get("/api/config/requests")
     def list_requests() -> tuple[Response, int]:
         try:
             count = int(request.args.get("count", "10"))
@@ -1367,43 +1386,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Recent request logs loaded.",
             data=[entry.to_dict() for entry in logs],
         )
-
-    handlers = {
-        "health": health,
-        "config": config,
-        "scanner_stream_proxy": scanner_stream_proxy,
-        "scanner_manual_config": scanner_manual_config,
-        "scanner_focus_adjust": scanner_focus_adjust,
-        "scanner_capture_start": scanner_capture_start,
-        "scanner_capture_status": scanner_capture_status,
-        "scanner_capture_result": scanner_capture_result,
-        "scanner_capture_run": scanner_capture_run,
-        "scanner_capture_run_status": scanner_capture_run_status,
-        "serial_ports": serial_ports,
-        "serial_port_check": serial_port_check,
-        "connect": connect,
-        "disconnect": disconnect,
-        "status": status,
-        "upload_svg": upload_svg,
-        "print_svg": print_svg,
-        "bulk_print_svg": bulk_print_svg,
-        "stop_bulk_print": stop_bulk_print,
-        "void_print": void_print,
-        "change_pen_start": change_pen_start,
-        "change_pen_finish": change_pen_finish,
-        "change_pen": change_pen,
-        "reset": reset,
-        "set_pen_max_distance": set_pen_max_distance,
-        "request_capture": request_capture,
-        "scanner_capture_manual": scanner_capture_manual,
-        "capture_upload": capture_upload,
-        "capture_latest": capture_latest,
-        "capture_latest_image": capture_latest_image,
-        "get_request": get_request,
-        "list_requests": list_requests,
-    }
-    register_cmd_routes(app, handlers)
-    register_config_routes(app, handlers)
 
     return app
 

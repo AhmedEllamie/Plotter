@@ -132,6 +132,12 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         methods=["POST"],
     )
     app.add_url_rule(
+        "/api/config/scanner/capture/oneshot",
+        endpoint="config_scanner_capture_oneshot",
+        view_func=handlers["scanner_capture_manual"],
+        methods=["POST"],
+    )
+    app.add_url_rule(
         "/api/config/requests/<string:request_id>",
         endpoint="config_request_get",
         view_func=handlers["get_request"],

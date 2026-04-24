@@ -238,6 +238,32 @@ function persistConnectionSettings() {
   saveConnectionSettings(readConnectionForm());
 }
 
+function setApiKey() {
+  const apiKey = String(document.getElementById("apiKey").value || "").trim();
+  if (!apiKey) {
+    showConfigMessage("API key cannot be empty.", true);
+    appendConfigLog("Set API key failed: empty value.", true);
+    return;
+  }
+  const connection = loadConnectionSettings();
+  saveConnectionSettings({ ...connection, apiKey });
+  showConfigMessage("API key saved.");
+  appendConfigLog("API key saved.");
+}
+
+function getApiKey() {
+  const connection = loadConnectionSettings();
+  const apiKey = String(connection.apiKey || "").trim();
+  document.getElementById("apiKey").value = apiKey;
+  if (apiKey) {
+    showConfigMessage("API key loaded from local settings.");
+    appendConfigLog("API key loaded.");
+  } else {
+    showConfigMessage("No saved API key found.", true);
+    appendConfigLog("Get API key: no saved value.", true);
+  }
+}
+
 function persistPrintSettings() {
   savePrintSettings(readPrintSettingsForm());
 }
@@ -521,7 +547,7 @@ async function flushManualFocusSync() {
 }
 
 function registerPersistenceListeners() {
-  const connectionFields = ["comPort", "apiKey"];
+  const connectionFields = ["comPort"];
   const printFields = [
     "width",
     "height",
@@ -670,6 +696,8 @@ function registerActions() {
   document.getElementById("scanPortsBtn").addEventListener("click", scanSerialPorts);
   document.getElementById("connectBtn").addEventListener("click", connectPrinter);
   document.getElementById("disconnectBtn").addEventListener("click", disconnectPrinter);
+  document.getElementById("setApiKeyBtn").addEventListener("click", setApiKey);
+  document.getElementById("getApiKeyBtn").addEventListener("click", getApiKey);
   document.getElementById("setPenMaxBtn").addEventListener("click", setPenMaxDistance);
   document.getElementById("changePenBtn").addEventListener("click", runChangePen);
   document.getElementById("resetBtn").addEventListener("click", runReset);

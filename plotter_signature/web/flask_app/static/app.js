@@ -392,38 +392,14 @@ async function toggleCaptureFullscreen() {
 }
 
 async function requestCaptureAndThrow() {
-  const startData = await apiPostJson("/api/config/scanner/capture/run", {
-    readability_required: true,
-    timeout_seconds: 15,
+  const data = await apiPostJson("/api/config/scanner/capture/oneshot", {
+    autofocus_enabled: false,
+    manual_focus_value: 35,
   });
-  const jobId = String(startData.jobId || "").trim();
-  if (!jobId) {
-    throw new Error("Capture job id was not returned.");
-  }
-
-  const maxAttempts = 50;
-  let latestState = "";
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const statusData = await apiGet(`/api/config/scanner/capture/run/${encodeURIComponent(jobId)}`);
-    latestState = String(statusData.state || "").toLowerCase();
-    if (latestState === "succeeded") {
-      const imageUrl = String(statusData.imageUrl || "/api/config/capture/latest/image");
-      const imageEl = document.getElementById("capturePreview");
-      imageEl.src = `${imageUrl}?t=${Date.now()}`;
-      imageEl.style.display = "block";
-      break;
-    }
-    if (latestState === "failed") {
-      throw new Error(String(statusData.error || "Capture failed."));
-    }
-    if (latestState === "timeout") {
-      throw new Error(String(statusData.error || "Capture timed out."));
-    }
-    await sleep(400);
-  }
-  if (latestState !== "succeeded") {
-    throw new Error("Capture status polling timed out.");
-  }
+  const imageUrl = String(data.imageUrl || "/api/config/capture/latest/image");
+  const imageEl = document.getElementById("capturePreview");
+  imageEl.src = `${imageUrl}?t=${Date.now()}`;
+  imageEl.style.display = "block";
 }
 
 async function requestCapture() {
