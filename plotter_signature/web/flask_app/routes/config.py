@@ -150,6 +150,12 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         methods=["POST"],
     )
     app.add_url_rule(
+        "/api/config/print-history",
+        endpoint="config_print_history",
+        view_func=handlers["print_history"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
         "/api/config/requests/<string:request_id>",
         endpoint="config_request_get",
         view_func=handlers["get_request"],

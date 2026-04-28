@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
+import queue
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import re
 import sys
 import threading
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -136,6 +138,16 @@ def _to_iso8601_utc(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat()
+
+
+@dataclass
+class _QueuedPrintJob:
+    job_id: UUID
+    kind: str
+    svg_payload: bytes
+    svg_file_name: str
+    print_request_dict: dict[str, Any]
+    copies: int
 
 
 def _trigger_capture_reset(settings: FlaskCaptureSettings, payload: dict[str, Any]) -> dict[str, Any]:
@@ -415,6 +427,133 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 last_scanner_manual_config["manual_focus_value"] = float(capture_profile.get("manual_focus_value"))
             except (TypeError, ValueError):
                 pass
+
+    pending_print_queue: queue.Queue[_QueuedPrintJob] = queue.Queue()
+    print_execution_lock = threading.Lock()
+    active_history_job_holder: dict[str, UUID | None] = {"id": None}
+
+    def _execute_queued_job(job: _QueuedPrintJob) -> dict[str, Any]:
+        active_history_job_holder["id"] = job.job_id
+        provider.print_history_store.update_started(job.job_id)
+        try:
+            print_request = _build_print_request(job.print_request_dict)
+            gcode = _convert_svg(job.svg_payload, print_request)
+            if job.kind == "bulk":
+                print_result = _run_async(provider.printer_service.bulk_print(gcode, job.copies))
+                st = provider.printer_service.get_status()
+                if st.bulk_stop_requested and int(print_result.copies or 0) < job.copies:
+                    final_status = "stopped"
+                else:
+                    final_status = "completed"
+                copies_printed = int(print_result.copies or 0)
+                data: dict[str, Any] = {
+                    "svgFileName": job.svg_file_name,
+                    "copies": job.copies,
+                    "commandCount": len(gcode),
+                    "result": asdict(print_result),
+                    "bulkProgress": {
+                        "requestedTotal": job.copies,
+                        "printedCount": copies_printed,
+                        "stopRequested": bool(st.bulk_stop_requested),
+                    },
+                    "status": asdict(st),
+                }
+            else:
+                print_result = _run_async(provider.printer_service.print(gcode))
+                final_status = "completed"
+                copies_printed = 1
+                data = {
+                    "svgFileName": job.svg_file_name,
+                    "commandCount": len(gcode),
+                    "result": asdict(print_result),
+                    "status": asdict(provider.printer_service.get_status()),
+                }
+            provider.print_history_store.update_completed(
+                job.job_id,
+                status=final_status,
+                copies_printed=copies_printed,
+                result_json={"payload": data},
+            )
+            runtime_state.clear_uploaded_svg()
+            return data
+        except Exception as ex:
+            provider.print_history_store.update_completed(job.job_id, status="failed", error_message=str(ex))
+            runtime_state.clear_uploaded_svg()
+            raise
+        finally:
+            active_history_job_holder["id"] = None
+
+    def _drain_pending_print_queue() -> None:
+        while True:
+            try:
+                next_job = pending_print_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                _execute_queued_job(next_job)
+            except (ValueError, RuntimeError, Exception):
+                pass
+
+    def _submit_print_job(
+        kind: str,
+        svg_payload: bytes,
+        svg_file_name: str,
+        print_request_dict: dict[str, Any],
+        copies: int,
+    ) -> tuple[Response, int]:
+        svg_name = svg_file_name or "uploaded.svg"
+        sha = hashlib.sha256(svg_payload).hexdigest()
+        job_uuid = provider.print_history_store.insert_queued(
+            job_type=kind,
+            signature_file_name=svg_name,
+            signature_sha256=sha,
+            copies_requested=copies if kind == "bulk" else 1,
+        )
+        job = _QueuedPrintJob(
+            job_id=job_uuid,
+            kind=kind,
+            svg_payload=svg_payload,
+            svg_file_name=svg_name,
+            print_request_dict=dict(print_request_dict),
+            copies=copies,
+        )
+
+        if not print_execution_lock.acquire(blocking=False):
+            pending_print_queue.put(job)
+            return api_success(
+                message="Printer busy; print job queued.",
+                data={
+                    "queued": True,
+                    "jobId": str(job_uuid),
+                    "queuePosition": pending_print_queue.qsize(),
+                    "jobType": kind,
+                    "signatureSha256": sha,
+                    "svgFileName": svg_name,
+                },
+                status_code=202,
+            )
+
+        try:
+            try:
+                out = _execute_queued_job(job)
+                _drain_pending_print_queue()
+                return api_success(
+                    message="Print completed." if kind == "print" else "Bulk print completed.",
+                    data={**out, "queued": False, "jobId": str(job_uuid), "jobType": kind},
+                )
+            except ValueError as ex:
+                _drain_pending_print_queue()
+                return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
+            except RuntimeError as ex:
+                _drain_pending_print_queue()
+                return api_error(str(ex), error_code="PRINT_RUNTIME_ERROR", status_code=400)
+            except Exception as ex:
+                _drain_pending_print_queue()
+                if kind == "bulk":
+                    return api_error(f"Bulk print failed: {ex}", error_code="BULK_PRINT_FAILED", status_code=500)
+                return api_error(f"Print failed: {ex}", error_code="PRINT_FAILED", status_code=500)
+        finally:
+            print_execution_lock.release()
 
     @app.before_request
     def require_api_key_for_api_routes() -> tuple[Response, int] | None:
@@ -1157,102 +1296,50 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def print_svg() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
-            _ensure_not_busy(provider)
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
 
         upload = request.files.get("svg")
-        if upload is not None:
-            svg_payload = upload.read()
-            svg_file_name = upload.filename or "uploaded.svg"
-            if not svg_payload:
-                return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
-            runtime_state.set_uploaded_svg(svg_file_name, svg_payload)
-        else:
-            uploaded = runtime_state.get_uploaded_svg()
-            if uploaded is None:
-                return api_error(
-                    "No uploaded SVG found. Call POST /api/config/upload first.",
-                    error_code="SVG_NOT_UPLOADED",
-                    status_code=400,
-                )
-            svg_payload = uploaded.content
-            svg_file_name = uploaded.file_name
+        if upload is None:
+            return api_error(
+                "SVG file is required on each print (multipart field 'svg').",
+                error_code="SVG_REQUIRED",
+                status_code=400,
+            )
+        svg_payload = upload.read()
+        svg_file_name = upload.filename or "uploaded.svg"
+        if not svg_payload:
+            return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
 
-        try:
-            print_request = _build_print_request(_extract_print_payload())
-            gcode = _convert_svg(svg_payload, print_request)
-            print_result = _run_async(provider.printer_service.print(gcode))
-        except ValueError as ex:
-            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
-        except RuntimeError as ex:
-            return api_error(str(ex), error_code="PRINT_RUNTIME_ERROR", status_code=400)
-        except Exception as ex:
-            return api_error(f"Print failed: {ex}", error_code="PRINT_FAILED", status_code=500)
-
-        return api_success(
-            message="Print completed.",
-            data={
-                "svgFileName": svg_file_name,
-                "commandCount": len(gcode),
-                "result": asdict(print_result),
-                "status": asdict(provider.printer_service.get_status()),
-            },
-        )
+        print_request_dict = _extract_print_payload()
+        return _submit_print_job("print", svg_payload, svg_file_name, print_request_dict, copies=1)
 
     @app.post("/api/cmd/print/bulk")
     def bulk_print_svg() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
-            _ensure_not_busy(provider)
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
 
         upload = request.files.get("svg")
-        if upload is not None:
-            svg_payload = upload.read()
-            svg_file_name = upload.filename or "uploaded.svg"
-            if not svg_payload:
-                return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
-            runtime_state.set_uploaded_svg(svg_file_name, svg_payload)
-        else:
-            uploaded = runtime_state.get_uploaded_svg()
-            if uploaded is None:
-                return api_error(
-                    "No uploaded SVG found. Call POST /api/config/upload first.",
-                    error_code="SVG_NOT_UPLOADED",
-                    status_code=400,
-                )
-            svg_payload = uploaded.content
-            svg_file_name = uploaded.file_name
+        if upload is None:
+            return api_error(
+                "SVG file is required on each bulk print (multipart field 'svg').",
+                error_code="SVG_REQUIRED",
+                status_code=400,
+            )
+        svg_payload = upload.read()
+        svg_file_name = upload.filename or "uploaded.svg"
+        if not svg_payload:
+            return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
 
         try:
             copies = _extract_bulk_copies()
-            print_request = _build_print_request(_extract_print_payload())
-            gcode = _convert_svg(svg_payload, print_request)
-            print_result = _run_async(provider.printer_service.bulk_print(gcode, copies))
         except ValueError as ex:
             return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
-        except RuntimeError as ex:
-            return api_error(str(ex), error_code="PRINT_RUNTIME_ERROR", status_code=400)
-        except Exception as ex:
-            return api_error(f"Bulk print failed: {ex}", error_code="BULK_PRINT_FAILED", status_code=500)
 
-        return api_success(
-            message="Bulk print completed.",
-            data={
-                "svgFileName": svg_file_name,
-                "copies": copies,
-                "commandCount": len(gcode),
-                "result": asdict(print_result),
-                "bulkProgress": {
-                    "requestedTotal": copies,
-                    "printedCount": int(print_result.copies or 0),
-                    "stopRequested": bool(provider.printer_service.get_status().bulk_stop_requested),
-                },
-                "status": asdict(provider.printer_service.get_status()),
-            },
-        )
+        print_request_dict = _extract_print_payload()
+        return _submit_print_job("bulk", svg_payload, svg_file_name, print_request_dict, copies=copies)
 
     @app.post("/api/cmd/bulk/stop")
     def stop_bulk_print() -> tuple[Response, int]:
@@ -1267,9 +1354,21 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not stop_requested:
             return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
 
+        st = provider.printer_service.get_status()
+        jid = active_history_job_holder.get("id")
+        if jid:
+            provider.print_history_store.update_completed(
+                jid,
+                status="stopped",
+                copies_printed=int(st.bulk_printed_count or 0),
+                error_message="Bulk stop requested",
+                result_json={"printerStatus": asdict(st)},
+            )
+        runtime_state.clear_uploaded_svg()
+
         return api_success(
             message="Bulk stop requested.",
-            data={"status": asdict(provider.printer_service.get_status())},
+            data={"status": asdict(st)},
         )
 
     @app.post("/api/cmd/void")
@@ -1551,6 +1650,19 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             as_attachment=False,
             download_name=model.file_name,
             max_age=0,
+        )
+
+    @app.get("/api/config/print-history")
+    def print_history() -> tuple[Response, int]:
+        try:
+            days = int(request.args.get("days", "30"))
+            limit = int(request.args.get("limit", "500"))
+        except ValueError:
+            return api_error("days and limit must be integers.", error_code="INVALID_QUERY", status_code=400)
+        items = provider.print_history_store.list_since(days=days, limit=limit)
+        return api_success(
+            message="Print history loaded.",
+            data={"items": items, "days": days, "limit": limit},
         )
 
     @app.get("/api/config/requests/<string:request_id>")

@@ -56,27 +56,25 @@ Poll from UI/kiosk to render connection, busy state, distance, and bulk state.
 ## `POST /api/cmd/print`
 
 ### Description
-Prints one job using uploaded SVG or the last stored SVG.
+Prints one job. Requires a fresh multipart SVG on every request; the server clears stored SVG after each job. If the printer is already printing (or other jobs are waiting), the job is accepted into an in-memory FIFO queue.
 
 ### How to use
-1. Optionally upload SVG first via `/api/config/upload`.
-2. Send print request settings.
+1. Send multipart form with `svg` (file) and `printRequestJson` (stringified JSON with optional nested `printRequest`).
+2. `POST /api/config/upload` remains optional (e.g. for preview); print does **not** use previously uploaded SVG alone.
 
 ### What it takes
-- JSON or form payload; supports nested `printRequest`.
-- Optional multipart SVG file (`svg`) to print directly.
+- Multipart: **`svg`** file part (required).
+- Multipart or JSON: print settings via `printRequestJson` or JSON body with `printRequest`.
 - Requires header: `X-API-Key`.
 
 ### Response
-- `svgFileName`
-- `commandCount`
-- `result`
-- `status`
+- **200**: job ran immediately — `queued: false`, `jobId`, `svgFileName`, `commandCount`, `result`, `status`.
+- **202**: printer busy — `queued: true`, `jobId`, `queuePosition`, `jobType`, `signatureSha256`, `svgFileName`.
 
 ### Error codes
-- `PRINTER_STATE_ERROR` (409)
+- `PRINTER_STATE_ERROR` (409) — not connected
+- `SVG_REQUIRED` (400) — missing `svg` file part
 - `EMPTY_SVG` (400)
-- `SVG_NOT_UPLOADED` (400)
 - `PRINT_VALIDATION_ERROR` (400)
 - `PRINT_RUNTIME_ERROR` (400)
 - `PRINT_FAILED` (500)
@@ -84,28 +82,22 @@ Prints one job using uploaded SVG or the last stored SVG.
 ## `POST /api/cmd/print/bulk`
 
 ### Description
-Runs multi-copy printing.
+Runs multi-copy printing in **one** server job using one SVG file. Same queue rules as single print: multipart `svg` is required; **202** if printer is busy. After completion or stop, stored SVG is cleared.
 
 ### How to use
-Send standard print request plus `copies` (1..100).
+Send multipart form: `svg`, `copies` (1–100), and `printRequestJson` (optional nested `printRequest`).
 
 ### What it takes
-- Same print payload types as single print.
-- `copies` required (JSON, form, or query).
+- Multipart **`svg`** (required), `copies`, print settings.
 - Requires header: `X-API-Key`.
 
 ### Response
-- `svgFileName`
-- `copies`
-- `commandCount`
-- `result`
-- `bulkProgress` (`requestedTotal`, `printedCount`, `stopRequested`)
-- `status`
+- **200** or **202** (same shape as single print); bulk payload includes `copies`, `bulkProgress`, `result` with `copies` / `total_commands_sent`.
 
 ### Error codes
 - `PRINTER_STATE_ERROR` (409)
+- `SVG_REQUIRED` (400)
 - `EMPTY_SVG` (400)
-- `SVG_NOT_UPLOADED` (400)
 - `PRINT_VALIDATION_ERROR` (400)
 - `PRINT_RUNTIME_ERROR` (400)
 - `BULK_PRINT_FAILED` (500)
@@ -113,7 +105,7 @@ Send standard print request plus `copies` (1..100).
 ## `POST /api/cmd/bulk/stop`
 
 ### Description
-Requests cooperative stop for an active bulk print.
+Requests cooperative stop for an active bulk print. Clears any stored uploaded SVG on the server so the next job must upload again.
 
 ### How to use
 Call from UI stop button while bulk operation is running.

@@ -212,3 +212,20 @@ Send one request to perform full scanner capture sequence and get final result m
 - `SCANNER_UNREACHABLE` (502)
 - `SCANNER_CAPTURE_FAILED` (500)
 
+## `GET /api/config/print-history`
+
+### Description
+Lists persisted print/bulk job history from SQLite (default **last 30 days**). Each row includes timestamps, `job_type` (`print` / `bulk`), status, signature file name, SHA-256, copies requested/printed, and optional `result` snapshot.
+
+### How to use
+Dashboard or auditing; query `days` (default 30) and `limit` (default 500, max 2000).
+
+### What it takes
+- Query: `days`, `limit` (optional).
+- Requires `X-API-Key`.
+
+### Response
+- `items[]`, `days`, `limit`
+
+### Error codes
+- `INVALID_QUERY` (400)

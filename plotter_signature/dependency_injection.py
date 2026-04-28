@@ -12,6 +12,7 @@ from plotter_signature.domain.contracts import (
     parse_bool,
 )
 from plotter_signature.domain.printer_settings import PrinterSettings
+from plotter_signature.infrastructure.stores.print_history_store import PrintHistoryStore
 from plotter_signature.infrastructure.stores.request_log_store import RequestLogStore
 from plotter_signature.services.approval.mock_approval_service import MockApprovalService
 from plotter_signature.services.print_approval.print_approval_service import PrintApprovalService
@@ -25,6 +26,7 @@ class ServiceProvider:
     approval_service_settings: ApprovalServiceSettings
     printer_service: PrinterService
     request_log_store: RequestLogStore
+    print_history_store: PrintHistoryStore
     approval_service: MockApprovalService
     print_approval_service: PrintApprovalService
 
@@ -62,6 +64,7 @@ def build_service_provider(config: dict[str, Any] | None = None) -> ServiceProvi
     )
 
     request_log_store = RequestLogStore()
+    print_history_store = PrintHistoryStore()
     printer_service = PrinterService(printer_settings)
 
     # Current Python port intentionally keeps mock approval only (per requested scope).
@@ -79,6 +82,7 @@ def build_service_provider(config: dict[str, Any] | None = None) -> ServiceProvi
         approval_service_settings=approval_service_settings,
         printer_service=printer_service,
         request_log_store=request_log_store,
+        print_history_store=print_history_store,
         approval_service=approval_service,
         print_approval_service=print_approval_service,
     )

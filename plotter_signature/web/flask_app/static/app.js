@@ -1,5 +1,6 @@
 const state = {
   uploadedSvgName: null,
+  lastSvgFile: null,
   capturePollHandle: null,
   statusPollHandle: null,
   lastBulkCopies: 1,
@@ -188,30 +189,67 @@ function startAutoStatusRefresh(intervalMs = 3000) {
   }, intervalMs);
 }
 
+function clearSelectedSvgUi() {
+  state.lastSvgFile = null;
+  state.uploadedSvgName = null;
+  const label = document.getElementById("uploadedSvgLabel");
+  if (label) {
+    label.textContent = "No SVG selected — choose a file before each print or bulk.";
+  }
+}
+
 async function uploadSvgFromFile(file) {
   const formData = new FormData();
   formData.append("svg", file);
   try {
     const data = await apiPostForm("/api/config/upload", formData);
     state.uploadedSvgName = data.fileName;
-    document.getElementById("uploadedSvgLabel").textContent = `Uploaded SVG: ${data.fileName}`;
-    appendLog(`SVG uploaded (${data.fileName}).`);
+    state.lastSvgFile = file;
+    document.getElementById("uploadedSvgLabel").textContent = `Ready to print: ${data.fileName} (re-select after each job)`;
+    appendLog(`SVG selected (${data.fileName}).`);
   } catch (error) {
     appendLog(`Upload error: ${error.message}`, true);
   }
 }
 
+function logPrintResponse(data, label) {
+  if (data.queued) {
+    appendLog(
+      `${label} queued | job ${data.jobId} | position ${data.queuePosition} | ${data.svgFileName || state.uploadedSvgName || ""}`
+    );
+    return;
+  }
+  const svgName = data.svgFileName || state.uploadedSvgName || "unknown.svg";
+  if (data.jobType === "bulk" && data.result) {
+    appendLog(
+      `${label} | SVG: ${svgName} | copies printed: ${data.result.copies ?? "?"} | commands: ${data.result.total_commands_sent ?? data.commandCount}.`
+    );
+  } else if (data.result) {
+    appendLog(`${label} | SVG: ${svgName} | commands: ${data.result.commands_sent}.`);
+  } else {
+    appendLog(`${label} completed.`);
+  }
+}
+
 async function printUploadedSvg() {
-  const payload = { printRequest: buildPrintSettingsPayload() };
+  if (!state.lastSvgFile) {
+    appendLog("Select an SVG file first (upload button). Each print requires the file.", true);
+    return;
+  }
+  const formData = new FormData();
+  formData.append("svg", state.lastSvgFile);
+  formData.append("printRequestJson", JSON.stringify({ printRequest: buildPrintSettingsPayload() }));
   try {
     const startedAt = new Date();
     appendLog(`Print started at ${formatTimestamp(startedAt)}.`);
-    const data = await apiPostJson("/api/cmd/print", payload);
+   
+    const data = await apiPostForm("/api/cmd/print", formData);
     const completedAt = new Date();
-    const svgName = data.svgFileName || state.uploadedSvgName || "unknown.svg";
-    appendLog(
-      `Print completed at ${formatTimestamp(completedAt)} | SVG: ${svgName} | Commands: ${data.result.commands_sent}.`
-    );
+    logPrintResponse(data, "Print");
+    if (!data.queued) {
+      appendLog(`Print finished at ${formatTimestamp(completedAt)}.`);
+    }
+    clearSelectedSvgUi();
     await refreshStatus();
   } catch (error) {
     appendLog(`Print error: ${error.message}`, true);
@@ -221,6 +259,11 @@ async function printUploadedSvg() {
 async function bulkPrintUploadedSvg() {
   if (state.bulkRunning) {
     appendLog("Bulk print is already running.", true);
+    return;
+  }
+
+  if (!state.lastSvgFile) {
+    appendLog("Select an SVG file first. One file is used for the entire bulk run.", true);
     return;
   }
 
@@ -243,46 +286,21 @@ async function bulkPrintUploadedSvg() {
   updateBulkProgressLabel();
   updateBulkUiState();
 
+  const formData = new FormData();
+  formData.append("svg", state.lastSvgFile);
+  formData.append("copies", String(copies));
+  formData.append("printRequestJson", JSON.stringify({ printRequest: buildPrintSettingsPayload() }));
+
   try {
-    appendLog(`Bulk print started (${copies} copies).`);
-    for (let index = 0; index < copies; index += 1) {
-      if (state.bulkStopRequested) {
-        appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
-        break;
-      }
-
-      appendLog(`Bulk ${index + 1}/${copies}: capturing photo...`);
-      await requestCaptureAndThrow();
-
-      if (state.bulkStopRequested) {
-        appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
-        break;
-      }
-
-      appendLog(`Bulk ${index + 1}/${copies}: waiting 5 seconds before print...`);
-      await sleep(5000);
-
-      if (state.bulkStopRequested) {
-        appendLog(`Bulk print stopped at ${state.bulkPrintedCount} / ${state.bulkRequestedTotal}.`);
-        break;
-      }
-
-      const payload = { printRequest: buildPrintSettingsPayload() };
-      const printStartedAt = new Date();
-      appendLog(`Bulk ${index + 1}/${copies}: print started at ${formatTimestamp(printStartedAt)}.`);
-      const printData = await apiPostJson("/api/cmd/print", payload);
-      state.bulkPrintedCount = index + 1;
+    appendLog(`Bulk print started (${copies} copies, one server job).`);
+    const data = await apiPostForm("/api/cmd/print/bulk", formData);
+    logPrintResponse(data, "Bulk print");
+    state.bulkPrintedCount = data.result?.copies ?? copies;
+    if (!data.queued) {
+      state.bulkRequestedTotal = copies;
       updateBulkProgressLabel();
-      const printCompletedAt = new Date();
-      const bulkSvgName = printData.svgFileName || state.uploadedSvgName || "unknown.svg";
-      appendLog(
-        `Bulk ${state.bulkPrintedCount}/${state.bulkRequestedTotal}: printed at ${formatTimestamp(printCompletedAt)} | SVG: ${bulkSvgName}.`
-      );
     }
-
-    if (!state.bulkStopRequested && state.bulkPrintedCount === state.bulkRequestedTotal) {
-      appendLog(`Bulk print completed (${state.bulkPrintedCount} / ${state.bulkRequestedTotal}).`);
-    }
+    clearSelectedSvgUi();
     await refreshStatus();
   } catch (error) {
     appendLog(`Bulk print error: ${error.message}`, true);
@@ -295,14 +313,13 @@ async function bulkPrintUploadedSvg() {
 
 async function stopBulkPrint() {
   if (!state.bulkRunning) {
-    appendLog("No bulk print is currently running.", true);
+    appendLog("No bulk print is currently running in this page session.", true);
     return;
   }
   state.bulkStopRequested = true;
   try {
     await apiPostJson("/api/cmd/bulk/stop");
   } catch (error) {
-    // Frontend bulk flow can still stop at the next loop boundary.
     appendLog(`Stop request warning: ${error.message}`, true);
   }
   appendLog("Stop bulk requested.");
@@ -436,6 +453,7 @@ function registerEvents() {
 
 async function initPage() {
   registerEvents();
+  clearSelectedSvgUi();
   updateCaptureFullscreenButtonLabel();
   updateBulkProgressLabel();
   updateBulkUiState();
