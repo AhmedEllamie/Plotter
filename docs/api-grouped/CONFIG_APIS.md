@@ -195,22 +195,38 @@ Send direction/step payload.
 ### Description
 Primary one-call capture API used by the Capture button.
 ### How to use
-Send one request to perform full scanner capture sequence and get final result metadata.
+Send one request to perform full scanner capture sequence and get final result metadata (same fields as `GET /api/config/capture/latest`, including optional inline image).
 ### What it takes
 - JSON payload required by manual capture flow (quad points/config payload).
+- Optional `includeDataUri` (boolean, default **true** for this route): when true, response includes `dataUri` (`data:{contentType};base64,...`) so clients can show the image without a follow-up `GET` to `.../capture/latest/image`.
 - Requires `X-API-Key`.
 ### Response
 - Final capture payload including:
   - `captureId`
   - `fileName`
   - `contentType`
+  - `sizeBytes`
   - `capturedAt`
   - `imageUrl`
+  - `includeDataUri` true: `dataUri` for direct use as an `<img src>`.
 ### Error codes
 - `SCANNER_CONFIG_REQUIRED` (400)
 - `SCANNER_HTTP_ERROR` (502)
 - `SCANNER_UNREACHABLE` (502)
 - `SCANNER_CAPTURE_FAILED` (500)
+
+## `POST /api/config/scanner/capture-manual`
+### Description
+Same capture pipeline as oneshot; defaults `includeDataUri` to **false** unless the client sets `includeDataUri: true`. The key `includeDataUri` is never forwarded to the scanner service (API-only).
+### How to use
+Advanced clients that want metadata only (no base64 image) omit `includeDataUri` or set it to false.
+### What it takes
+- Same JSON body as oneshot (`quad_points`, focus fields, optional `includeDataUri`).
+- Requires `X-API-Key`.
+### Response
+- Same shape as oneshot (`captureId`, `fileName`, `contentType`, `sizeBytes`, `capturedAt`, `imageUrl`, optional `dataUri`).
+### Error codes
+- Same as oneshot.
 
 ## `GET /api/config/print-history`
 

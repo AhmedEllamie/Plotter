@@ -128,6 +128,7 @@ class PrintResponse:
     executed_distance_mm: float = 0.0
     execution_percent: float = 0.0
     cumulative_distance_mm: float = 0.0
+    job_stopped: bool = False
 
 
 @dataclass

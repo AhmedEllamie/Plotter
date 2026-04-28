@@ -115,7 +115,26 @@ class PrinterService(IPrinterService):
     async def print(self, gcode: list[str]) -> PrintResponse:
         self._begin_print_job()
         try:
-            result = await asyncio.to_thread(self._execute_print_cycle, gcode)
+            try:
+                result = await asyncio.to_thread(self._execute_print_cycle, gcode)
+            except RuntimeError:
+                if not self._stop_requested.is_set():
+                    raise
+                self._add_to_cumulative_distance(self._current_executed_distance_mm)
+                execution_percent = self._calculate_execution_percent(
+                    self._current_executed_distance_mm,
+                    self._current_svg_total_distance_mm,
+                )
+                self._stop_requested.clear()
+                return PrintResponse(
+                    message="Print stopped by user.",
+                    commands_sent=0,
+                    svg_total_distance_mm=round(self._current_svg_total_distance_mm, 3),
+                    executed_distance_mm=round(self._current_executed_distance_mm, 3),
+                    execution_percent=execution_percent,
+                    cumulative_distance_mm=round(self._cumulative_distance_mm, 3),
+                    job_stopped=True,
+                )
             self._add_to_cumulative_distance(result["executed_distance_mm"])
             execution_percent = self._calculate_execution_percent(
                 result["executed_distance_mm"], result["svg_total_distance_mm"]
@@ -127,6 +146,7 @@ class PrinterService(IPrinterService):
                 executed_distance_mm=round(result["executed_distance_mm"], 3),
                 execution_percent=execution_percent,
                 cumulative_distance_mm=round(self._cumulative_distance_mm, 3),
+                job_stopped=False,
             )
         finally:
             self._end_print_job()
@@ -144,7 +164,13 @@ class PrinterService(IPrinterService):
                 for _ in range(copies):
                     if self._stop_requested.is_set():
                         break
-                    result = self._execute_print_cycle(gcode)
+                    try:
+                        result = self._execute_print_cycle(gcode)
+                    except RuntimeError:
+                        if not self._stop_requested.is_set():
+                            raise
+                        total_executed_distance += self._current_executed_distance_mm
+                        break
                     total_commands += result["commands_sent"]
                     total_executed_distance += result["executed_distance_mm"]
                     self._bulk_printed_count += 1
@@ -152,8 +178,13 @@ class PrinterService(IPrinterService):
             await asyncio.to_thread(run)
             self._add_to_cumulative_distance(total_executed_distance)
             printed_copies = self._bulk_printed_count
-            total_svg_distance = svg_total_distance * printed_copies
             stopped = self._stop_requested.is_set() and printed_copies < copies
+            if stopped:
+                total_svg_distance = svg_total_distance * copies
+            else:
+                total_svg_distance = svg_total_distance * printed_copies
+            if self._stop_requested.is_set():
+                self._stop_requested.clear()
             return PrintResponse(
                 message="Bulk print stopped by user." if stopped else "Bulk print complete.",
                 copies=printed_copies,
@@ -177,12 +208,15 @@ class PrinterService(IPrinterService):
         finally:
             self._end_print_job()
 
-    def stop_bulk_print(self) -> bool:
+    def request_print_cancel(self) -> bool:
         with self._print_lock:
             if not self._is_printing:
                 return False
             self._stop_requested.set()
             return True
+
+    def stop_bulk_print(self) -> bool:
+        return self.request_print_cancel()
 
     async def pen_change_start(self) -> PrintResponse:
         self._begin_print_job()
@@ -437,7 +471,7 @@ class PrinterService(IPrinterService):
 
     def _throw_if_stop_requested(self) -> None:
         if self._stop_requested.is_set():
-            raise RuntimeError("Bulk print stop requested by user.")
+            raise RuntimeError("Print job stop requested by user.")
 
     def _distance_delta_for_command(self, command: str, state: dict[str, float | bool]) -> float:
         parsed = self._parse_command_values(command)

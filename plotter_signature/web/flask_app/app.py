@@ -432,6 +432,20 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     print_execution_lock = threading.Lock()
     active_history_job_holder: dict[str, UUID | None] = {"id": None}
 
+    def _apply_print_stop_side_effects() -> dict[str, Any]:
+        st = provider.printer_service.get_status()
+        jid = active_history_job_holder.get("id")
+        if jid:
+            provider.print_history_store.update_completed(
+                jid,
+                status="stopped",
+                copies_printed=int(st.bulk_printed_count or 0),
+                error_message="Print stop requested",
+                result_json={"printerStatus": asdict(st)},
+            )
+        runtime_state.clear_uploaded_svg()
+        return {"status": asdict(st)}
+
     def _execute_queued_job(job: _QueuedPrintJob) -> dict[str, Any]:
         active_history_job_holder["id"] = job.job_id
         provider.print_history_store.update_started(job.job_id)
@@ -441,12 +455,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             if job.kind == "bulk":
                 print_result = _run_async(provider.printer_service.bulk_print(gcode, job.copies))
                 st = provider.printer_service.get_status()
-                if st.bulk_stop_requested and int(print_result.copies or 0) < job.copies:
-                    final_status = "stopped"
-                else:
-                    final_status = "completed"
                 copies_printed = int(print_result.copies or 0)
-                data: dict[str, Any] = {
+                final_status = "stopped" if copies_printed < job.copies else "completed"
+                data = {
                     "svgFileName": job.svg_file_name,
                     "copies": job.copies,
                     "commandCount": len(gcode),
@@ -454,19 +465,20 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     "bulkProgress": {
                         "requestedTotal": job.copies,
                         "printedCount": copies_printed,
-                        "stopRequested": bool(st.bulk_stop_requested),
+                        "stopRequested": final_status == "stopped",
                     },
                     "status": asdict(st),
                 }
             else:
                 print_result = _run_async(provider.printer_service.print(gcode))
-                final_status = "completed"
-                copies_printed = 1
+                st = provider.printer_service.get_status()
+                final_status = "stopped" if print_result.job_stopped else "completed"
+                copies_printed = 0 if print_result.job_stopped else 1
                 data = {
                     "svgFileName": job.svg_file_name,
                     "commandCount": len(gcode),
                     "result": asdict(print_result),
-                    "status": asdict(provider.printer_service.get_status()),
+                    "status": asdict(st),
                 }
             provider.print_history_store.update_completed(
                 job.job_id,
@@ -1354,28 +1366,26 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not stop_requested:
             return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
 
-        st = provider.printer_service.get_status()
-        jid = active_history_job_holder.get("id")
-        if jid:
-            provider.print_history_store.update_completed(
-                jid,
-                status="stopped",
-                copies_printed=int(st.bulk_printed_count or 0),
-                error_message="Bulk stop requested",
-                result_json={"printerStatus": asdict(st)},
-            )
-        runtime_state.clear_uploaded_svg()
+        data = _apply_print_stop_side_effects()
 
         return api_success(
             message="Bulk stop requested.",
-            data={"status": asdict(st)},
+            data=data,
         )
 
     @app.post("/api/cmd/void")
     def void_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
-            _ensure_not_busy(provider)
+            if provider.printer_service.is_printing:
+                stop_requested = provider.printer_service.request_print_cancel()
+                if not stop_requested:
+                    return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
+                data = _apply_print_stop_side_effects()
+                return api_success(
+                    message="Current print job stop requested. The printer will eject and return to idle.",
+                    data=data,
+                )
             result = _run_async(provider.printer_service.void_print())
         except RuntimeError as ex:
             return api_error(str(ex), error_code="VOID_RUNTIME_ERROR", status_code=409)
@@ -1512,17 +1522,25 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
         return api_success("Capture reset command sent.", data=response_payload)
 
-    @app.post("/api/config/scanner/capture-manual")
-    def scanner_capture_manual() -> tuple[Response, int]:
+    def _scanner_manual_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        """Strip API-only keys so they are never sent to the scanner session endpoints."""
+        work = dict(payload)
+        work.pop("includeDataUri", None)
+        return work
+
+    def _scanner_capture_manual_impl(*, include_data_uri_default: bool) -> tuple[Response, int]:
         payload = _get_json_dict()
         if not payload:
             return api_error("Capture config payload is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
 
+        session_payload = _scanner_manual_session_payload(payload)
+        include_data_uri = parse_bool(payload.get("includeDataUri"), default=include_data_uri_default)
+
         try:
-            manual_config_response = _apply_scanner_session_config(payload, require_quad_points=True)
+            manual_config_response = _apply_scanner_session_config(session_payload, require_quad_points=True)
             if manual_config_response.get("ok") is False:
                 raise RuntimeError(manual_config_response.get("message") or "Scanner manual config failed.")
-            _remember_scanner_manual_config(payload, manual_config_response)
+            _remember_scanner_manual_config(session_payload, manual_config_response)
 
             _, start_capture_response = _scanner_request_json(
                 scanner_settings,
@@ -1581,20 +1599,30 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             content_type=content_type,
             content=image_payload,
         )
+        data: dict[str, Any] = {
+            "captureId": capture_id,
+            "fileName": model.file_name,
+            "contentType": model.content_type,
+            "sizeBytes": len(model.content),
+            "capturedAt": _to_iso8601_utc(model.captured_at),
+            "imageUrl": "/api/config/capture/latest/image",
+        }
+        if include_data_uri:
+            encoded = base64.b64encode(model.content).decode("ascii")
+            data["dataUri"] = f"data:{model.content_type};base64,{encoded}"
+
         return api_success(
             message="Manual scanner capture completed.",
-            data={
-                "captureId": capture_id,
-                "fileName": model.file_name,
-                "contentType": model.content_type,
-                "capturedAt": _to_iso8601_utc(model.captured_at),
-                "imageUrl": "/api/config/capture/latest/image",
-            },
+            data=data,
         )
+
+    @app.post("/api/config/scanner/capture-manual")
+    def scanner_capture_manual() -> tuple[Response, int]:
+        return _scanner_capture_manual_impl(include_data_uri_default=False)
 
     @app.post("/api/config/scanner/capture/oneshot")
     def scanner_capture_oneshot() -> tuple[Response, int]:
-        return scanner_capture_manual()
+        return _scanner_capture_manual_impl(include_data_uri_default=True)
 
     @app.post("/api/config/capture")
     def capture_upload() -> tuple[Response, int]:

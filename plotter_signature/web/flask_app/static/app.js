@@ -414,9 +414,13 @@ async function requestCaptureAndThrow() {
     autofocus_enabled: Boolean(capture.autofocusEnabled),
     manual_focus_value: Number(capture.manualFocusValue || 35),
   });
-  const imageUrl = String(data.imageUrl || "/api/config/capture/latest/image");
   const imageEl = document.getElementById("capturePreview");
-  imageEl.src = `${imageUrl}?t=${Date.now()}`;
+  if (data.dataUri) {
+    imageEl.src = String(data.dataUri);
+  } else {
+    const imageUrl = String(data.imageUrl || "/api/config/capture/latest/image");
+    imageEl.src = `${imageUrl}?t=${Date.now()}`;
+  }
   imageEl.style.display = "block";
 }
 

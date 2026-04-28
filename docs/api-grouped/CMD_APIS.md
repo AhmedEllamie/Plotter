@@ -125,18 +125,22 @@ Call from UI stop button while bulk operation is running.
 ## `POST /api/cmd/void`
 
 ### Description
-Runs void/eject-safe printer sequence without drawing.
+When the printer is **idle**, runs the void/eject-safe printer sequence without drawing. When the printer is **busy** (active print or bulk job), requests the same in-job **cancel** as `POST /api/cmd/bulk/stop`: the firmware path stops between G-code lines, runs the normal eject in the print cycle `finally`, and the next job can start. Does **not** start a second serial “void” cycle on top of an in-flight job.
+
+**Note:** Pen-change operations also mark the printer busy; cancel is requested but those command paths may not honor the stop flag until supported.
 
 ### How to use
-Use after rejection or maintenance operations.
+Use after rejection or maintenance when idle; use as an emergency **stop** while printing (terminator) without losing the ability to print again.
 
 ### What it takes
 - No body required.
 - Requires header: `X-API-Key`.
 
 ### Response
-- Void operation result object.
+- Idle: void operation result object (`PrintResponse`).
+- Busy: same shape as bulk stop — `data.status` with updated `PrinterStatus` (cancel requested; job finishes asynchronously on the worker).
 
 ### Error codes
 - `VOID_RUNTIME_ERROR` (409)
+- `PRINTER_NOT_BUSY` (409) — if busy flag was inconsistent (rare race).
 - `VOID_FAILED` (500)
