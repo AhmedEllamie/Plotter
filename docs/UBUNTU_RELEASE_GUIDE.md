@@ -21,7 +21,10 @@ newgrp dialout
 ```bash
 sudo mkdir -p /opt
 cd /opt
-sudo git clone <YOUR_REPO_URL> plotter-signature
+# Standalone plotter repo:
+sudo git clone https://github.com/AhmedEllamie/Plotter.git plotter-signature
+# Or: full stack (plotter + scanner submodules) — then use .../Automated_Signature/plotter-signature
+# git clone --recurse-submodules https://github.com/AhmedEllamie/Automated_Signature.git
 sudo chown -R $USER:$USER /opt/plotter-signature
 cd /opt/plotter-signature
 

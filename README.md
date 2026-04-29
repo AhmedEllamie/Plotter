@@ -2,6 +2,8 @@
 
 Printer automation for the Plotter signature workflow. The project exposes the same service graph through three delivery surfaces - Flask (UI + REST), FastAPI (REST only), and a CLI - and ships with a Tkinter-based operator kiosk.
 
+**Repositories:** this codebase is [AhmedEllamie/Plotter](https://github.com/AhmedEllamie/Plotter) on GitHub. To work on **plotter and scanner** in one tree, clone the meta repo with submodules: [AhmedEllamie/Automated_Signature](https://github.com/AhmedEllamie/Automated_Signature) (sibling folder `a4-flating/` is [Scanner](https://github.com/AhmedEllamie/Scanner)).
+
 ## Repository layout
 
 ```
