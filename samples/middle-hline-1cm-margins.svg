@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="210mm"
+     height="297mm"
+     viewBox="0 0 210 297">
+  <g fill="none" stroke="#000000" stroke-width="0.5" stroke-linecap="round">
+    <!-- Single horizontal line: 1 cm from left (x=10) to 1 cm from right (x=200), vertically centered -->
+    <line x1="10" y1="148.5" x2="200" y2="148.5"/>
+  </g>
+</svg>
