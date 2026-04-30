@@ -53,9 +53,10 @@ def load_scanner_service_settings() -> ScannerServiceSettings:
     if max_attempts < 1:
         max_attempts = 1
 
+    token = os.getenv("SCANNER_SERVICE_TOKEN", "").strip() or os.getenv("SCANNER_SERVICE_BEARER_TOKEN", "").strip()
     return ScannerServiceSettings(
         base_url=base_url,
-        token=os.getenv("SCANNER_SERVICE_TOKEN", "").strip(),
+        token=token,
         timeout_seconds=_parse_float(os.getenv("SCANNER_SERVICE_TIMEOUT_SECONDS"), default=15.0),
         job_poll_interval_seconds=_parse_float(os.getenv("SCANNER_JOB_POLL_INTERVAL_SECONDS"), default=0.4),
         job_poll_max_attempts=max_attempts,
