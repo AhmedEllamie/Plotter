@@ -1,15 +1,35 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+_DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
+
+
+def _read_plotter_api_key_from_file(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("PLOTTER_API_KEY="):
+                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return value
+    except OSError:
+        pass
+    return ""
+
 
 class PenKioskApp:
-    def __init__(self, api_base_url: str = "http://127.0.0.1:5001") -> None:
-        self._api_base_url = api_base_url.rstrip("/")
+    def __init__(self, api_base_url: str | None = None) -> None:
+        default_base = (os.getenv("PLOTTER_KIOSK_API_BASE") or "http://127.0.0.1:5001").strip()
+        resolved_base = (api_base_url or default_base).strip()
+        self._api_base_url = resolved_base.rstrip("/")
         self._root = Tk()
         self._root.title("Plotter Pen Config Kiosk")
         self._root.configure(bg="#0f172a")
@@ -283,6 +303,30 @@ class PenKioskApp:
         _ = message
         _ = is_error
 
+    def _resolve_api_key(self) -> str:
+        """Match Flask auth: prefer live env file (so key rotation applies without kiosk restart)."""
+        explicit = os.getenv("PLOTTER_API_KEY_FILE")
+        if explicit is not None:
+            path = explicit.strip()
+            if path:
+                key = _read_plotter_api_key_from_file(path)
+                if key:
+                    return key
+        else:
+            key = _read_plotter_api_key_from_file(_DEFAULT_PLOTTER_ENV_FILE)
+            if key:
+                return key
+        return (os.getenv("PLOTTER_API_KEY") or "").strip()
+
+    def _request_headers(self, *, json_body: bool = False) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if json_body:
+            headers["Content-Type"] = "application/json"
+        key = self._resolve_api_key()
+        if key:
+            headers["X-API-Key"] = key
+        return headers
+
     @staticmethod
     def _format_meters_from_mm(value: object) -> str:
         try:
@@ -303,7 +347,7 @@ class PenKioskApp:
         request = Request(
             url=f"{self._api_base_url}{path}",
             data=json.dumps(payload or {}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=self._request_headers(json_body=True),
             method="POST",
         )
         with urlopen(request, timeout=12) as response:
@@ -315,7 +359,11 @@ class PenKioskApp:
             return data if isinstance(data, dict) else {}
 
     def _api_get(self, path: str) -> dict[str, object]:
-        request = Request(url=f"{self._api_base_url}{path}", method="GET")
+        request = Request(
+            url=f"{self._api_base_url}{path}",
+            headers=self._request_headers(json_body=False),
+            method="GET",
+        )
         with urlopen(request, timeout=12) as response:
             body = response.read().decode("utf-8", errors="ignore")
             parsed = json.loads(body) if body else {}
@@ -333,10 +381,10 @@ class PenKioskApp:
             self._api_busy = True
             try:
                 self._api_post(endpoint, {})
-                self._root.after(0, lambda: self._append_feedback(success_message))
+                self._root.after(0, lambda m=success_message: self._append_feedback(m))
                 self._root.after(0, self._refresh_status)
             except Exception as ex:
-                self._root.after(0, lambda: self._append_feedback(str(ex), is_error=True))
+                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
             finally:
                 self._api_busy = False
 
@@ -362,7 +410,7 @@ class PenKioskApp:
                 self._root.after(0, lambda: self._append_feedback("Max pen distance updated."))
                 self._root.after(0, self._refresh_status)
             except Exception as ex:
-                self._root.after(0, lambda: self._append_feedback(str(ex), is_error=True))
+                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
             finally:
                 self._api_busy = False
 
@@ -379,7 +427,7 @@ class PenKioskApp:
                 self._root.after(0, lambda: self._append_feedback("Distance reset completed."))
                 self._root.after(0, self._refresh_status)
             except Exception as ex:
-                self._root.after(0, lambda: self._append_feedback(str(ex), is_error=True))
+                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
             finally:
                 self._api_busy = False
 

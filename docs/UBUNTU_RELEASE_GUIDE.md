@@ -181,6 +181,8 @@ sudo loginctl enable-linger $USER
 - API errors in kiosk feedback area:
   - verify Flask service is reachable with API key header:
     - `curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health`
-  - verify API key is set in `/configuration` page on the kiosk browser profile.
+  - the kiosk reads `PLOTTER_API_KEY` from `/etc/plotter-signature/plotter-signature.env` on **every** request when that file exists and is readable by the logged-in user (`PLOTTER_API_KEY_FILE` overrides the path); otherwise it uses the `PLOTTER_API_KEY` environment variable from the user service.
+  - after rotating the key in that file, **restart Flask** so the server picks up the new secret; the kiosk will pick it up on the next poll without restarting.
+  - verify API key is set in `/configuration` page on the kiosk browser profile (browser UI only).
 - Opens but not fullscreen:
   - use `F11` and check desktop environment fullscreen restrictions

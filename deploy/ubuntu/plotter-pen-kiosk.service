@@ -8,6 +8,9 @@ Type=simple
 WorkingDirectory=/opt/plotter-signature
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
+# Re-read on every HTTP call when this path is readable by the logged-in user (same file as Flask).
+# Override with PLOTTER_API_KEY_FILE=/path/to/env or set PLOTTER_API_KEY for a static key.
+Environment=PLOTTER_API_KEY_FILE=/etc/plotter-signature/plotter-signature.env
 ExecStart=/opt/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk
 Restart=always
 RestartSec=2
