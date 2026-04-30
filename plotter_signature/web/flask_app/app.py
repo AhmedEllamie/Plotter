@@ -99,6 +99,9 @@ def _extract_print_payload() -> dict[str, Any]:
             raise ValueError(f"Invalid printRequestJson: {ex}") from ex
         if not isinstance(parsed, dict):
             raise ValueError("printRequestJson must be a JSON object.")
+        nested = parsed.get("printRequest")
+        if isinstance(nested, dict):
+            return nested
         return parsed
 
     if request.form:
