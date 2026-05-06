@@ -27,17 +27,15 @@ from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, 
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
     get_configured_api_key,
+    is_api_key_required,
     validate_api_key,
 )
+from plotter_signature.services.printer.printer_service import AutoConnectFailedError
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
-from plotter_signature.web.flask_app.config import (
-    FlaskCaptureSettings,
-    ScannerServiceSettings,
-    load_capture_settings,
-    load_scanner_service_settings,
-)
+from plotter_signature.web.flask_app.config import ScannerServiceSettings, load_capture_settings, load_scanner_service_settings
 from plotter_signature.web.flask_app.response import api_error, api_success
 from plotter_signature.web.flask_app.state import RuntimeState
+from plotter_signature.web.startup_serial import run_startup_autoconnect
 
 
 def _run_async(coroutine: Any) -> Any:
@@ -61,12 +59,31 @@ def _parse_optional_int(value: Any) -> int | None:
 
 def _ensure_connected(provider: ServiceProvider) -> None:
     if not provider.printer_service.is_open:
-        raise RuntimeError("Printer is not connected. Call POST /api/config/connect first.")
+        raise RuntimeError("Printer is not connected. Call POST /api/config/auto-connect first.")
 
 
 def _ensure_not_busy(provider: ServiceProvider) -> None:
-    if provider.printer_service.is_printing:
+    if provider.printer_service.is_busy:
         raise RuntimeError("Printer is busy.")
+
+
+def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
+    payload = asdict(provider.printer_service.get_status())
+    payload.pop("port_name", None)
+    return payload
+
+
+def _manual_config_response_body(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {"ok": bool(raw.get("ok", True))}
+    mc = raw.get("manual_config")
+    if isinstance(mc, dict):
+        out["manual_config"] = dict(mc)
+    qp = raw.get("quad_points")
+    if qp is not None:
+        out["quad_points"] = qp
+    return out
 
 
 def _build_print_request(payload: dict[str, Any] | None) -> PrintRequest:
@@ -151,36 +168,6 @@ class _QueuedPrintJob:
     svg_file_name: str
     print_request_dict: dict[str, Any]
     copies: int
-
-
-def _trigger_capture_reset(settings: FlaskCaptureSettings, payload: dict[str, Any]) -> dict[str, Any]:
-    if not settings.is_configured:
-        raise RuntimeError("Capture reset URL is not configured.")
-
-    request_payload = {
-        "action": "capture_reset",
-        "requestedAt": datetime.now(timezone.utc).isoformat(),
-    }
-    request_payload.update(payload)
-    body = json.dumps(request_payload).encode("utf-8")
-
-    headers = {"Content-Type": "application/json"}
-    if settings.reset_token:
-        headers["Authorization"] = f"Bearer {settings.reset_token}"
-
-    request_obj = Request(
-        url=settings.reset_url,
-        data=body if settings.reset_method != "GET" else None,
-        method=settings.reset_method,
-        headers=headers,
-    )
-
-    with urlopen(request_obj, timeout=settings.reset_timeout_seconds) as response:
-        raw_body = response.read().decode("utf-8", errors="ignore")
-        return {
-            "statusCode": response.getcode(),
-            "responseBody": raw_body[:4000],
-        }
 
 
 def _extract_capture_image_payload() -> tuple[str, str, bytes]:
@@ -436,9 +423,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     active_history_job_holder: dict[str, UUID | None] = {"id": None}
 
     def _apply_print_stop_side_effects() -> dict[str, Any]:
-        st = provider.printer_service.get_status()
         jid = active_history_job_holder.get("id")
         if jid:
+            st = provider.printer_service.get_status()
             provider.print_history_store.update_completed(
                 jid,
                 status="stopped",
@@ -447,7 +434,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 result_json={"printerStatus": asdict(st)},
             )
         runtime_state.clear_uploaded_svg()
-        return {"status": asdict(st)}
+        return {"jobStopped": True}
 
     def _execute_queued_job(job: _QueuedPrintJob) -> dict[str, Any]:
         active_history_job_holder["id"] = job.job_id
@@ -457,7 +444,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             gcode = _convert_svg(job.svg_payload, print_request)
             if job.kind == "bulk":
                 print_result = _run_async(provider.printer_service.bulk_print(gcode, job.copies))
-                st = provider.printer_service.get_status()
                 copies_printed = int(print_result.copies or 0)
                 final_status = "stopped" if copies_printed < job.copies else "completed"
                 data = {
@@ -470,18 +456,15 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                         "printedCount": copies_printed,
                         "stopRequested": final_status == "stopped",
                     },
-                    "status": asdict(st),
                 }
             else:
                 print_result = _run_async(provider.printer_service.print(gcode))
-                st = provider.printer_service.get_status()
                 final_status = "stopped" if print_result.job_stopped else "completed"
                 copies_printed = 0 if print_result.job_stopped else 1
                 data = {
                     "svgFileName": job.svg_file_name,
                     "commandCount": len(gcode),
                     "result": asdict(print_result),
-                    "status": asdict(st),
                 }
             provider.print_history_store.update_completed(
                 job.job_id,
@@ -586,13 +569,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             g.issue_api_auth_cookie = bool(header_api_key)
             return None
 
-        if not validation.is_server_configured:
-            return api_error(
-                validation.message,
-                error_code="AUTH_NOT_CONFIGURED",
-                status_code=503,
-            )
-
         return api_error(
             validation.message,
             error_code="UNAUTHORIZED",
@@ -601,16 +577,21 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     @app.after_request
     def issue_api_auth_cookie(response: Response) -> Response:
-        if bool(getattr(g, "issue_api_auth_cookie", False)):
-            response.set_cookie(
-                key=api_auth_cookie_name,
-                value=get_configured_api_key(),
-                max_age=60 * 60 * 24 * 7,
-                httponly=True,
-                samesite="Lax",
-                secure=False,
-                path="/",
-            )
+        if (
+            bool(getattr(g, "issue_api_auth_cookie", False))
+            and is_api_key_required()
+        ):
+            configured = get_configured_api_key()
+            if configured:
+                response.set_cookie(
+                    key=api_auth_cookie_name,
+                    value=configured,
+                    max_age=60 * 60 * 24 * 7,
+                    httponly=True,
+                    samesite="Lax",
+                    secure=False,
+                    path="/",
+                )
         return response
 
     def _merge_scanner_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
@@ -847,7 +828,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Service is healthy.",
             data={
                 "printerConnected": provider.printer_service.is_open,
-                "printerBusy": provider.printer_service.is_printing,
+                "printerBusy": provider.printer_service.is_busy,
                 "captureResetConfigured": capture_settings.is_configured,
             },
         )
@@ -961,39 +942,10 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             )
         except Exception as ex:
             return api_error(f"Manual config failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
-        return api_success("Scanner manual config applied.", data=manual_config_response)
-
-    @app.post("/api/config/scanner/focus-adjust")
-    def scanner_focus_adjust() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        if not payload:
-            return api_error("Focus adjust payload is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            _, adjust_response = _scanner_request_json(
-                scanner_settings,
-                "/session/focus-adjust",
-                method="POST",
-                body=payload,
-            )
-            if adjust_response.get("ok") is False:
-                raise RuntimeError(adjust_response.get("message") or "Scanner focus adjust failed.")
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner focus adjust failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Focus adjust failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
-        return api_success("Scanner focus adjusted.", data=adjust_response)
+        return api_success(
+            "Scanner manual config applied.",
+            data=_manual_config_response_body(manual_config_response),
+        )
 
     @app.post("/api/config/scanner/capture/start")
     def scanner_capture_start() -> tuple[Response, int]:
@@ -1236,8 +1188,8 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             },
         )
 
-    @app.post("/api/config/connect")
-    def connect() -> tuple[Response, int]:
+    @app.post("/api/config/auto-connect")
+    def auto_connect() -> tuple[Response, int]:
         if provider.printer_service.is_open:
             return api_error(
                 message=f"Already connected to {provider.printer_service.port_name}. Disconnect first.",
@@ -1246,21 +1198,26 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             )
 
         payload = _get_json_dict()
-        com_port = (
-            payload.get("comPort")
-            or payload.get("com_port")
-            or request.args.get("comPort")
-            or request.args.get("com_port")
-            or provider.printer_service.default_com_port
-        )
+        com_port = payload.get("comPort") or payload.get("com_port") or request.args.get("comPort") or request.args.get("com_port")
+        com_port = str(com_port).strip() if com_port else None
         raw_baud = payload.get("baudRate") or payload.get("baud_rate") or request.args.get("baudRate")
         try:
-            baud_rate = _parse_optional_int(raw_baud) or provider.printer_service.default_baud_rate
-            provider.printer_service.open_port(str(com_port), baud_rate)
+            baud_rate = _parse_optional_int(raw_baud)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="INVALID_BAUD_RATE", status_code=400)
+        try:
+            provider.printer_service.autoconnect(explicit_com_port=com_port, baud_rate=baud_rate)
+        except AutoConnectFailedError as ex:
+            return api_error(
+                str(ex),
+                error_code="AUTO_CONNECT_FAILED",
+                status_code=400,
+                details={"attemptedPorts": ex.attempted_ports},
+            )
         except ValueError as ex:
             return api_error(str(ex), error_code="INVALID_BAUD_RATE", status_code=400)
         except Exception as ex:
-            return api_error(f"Failed to connect: {ex}", error_code="CONNECT_FAILED", status_code=400)
+            return api_error(f"Failed to auto-connect: {ex}", error_code="CONNECT_FAILED", status_code=400)
 
         return api_success(
             message=f"Connected to {provider.printer_service.port_name}.",
@@ -1271,41 +1228,19 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def disconnect() -> tuple[Response, int]:
         if not provider.printer_service.is_open:
             return api_error("Printer is not connected.", error_code="NOT_CONNECTED", status_code=409)
-        if provider.printer_service.is_printing:
+        if provider.printer_service.is_busy:
             return api_error(
-                "Cannot disconnect while printing.",
+                "Cannot disconnect while printer is busy.",
                 error_code="PRINTER_BUSY",
                 status_code=409,
             )
 
         provider.printer_service.close_port()
-        return api_success("Disconnected from printer.", data=asdict(provider.printer_service.get_status()))
+        return api_success("Disconnected from printer.", data=_printer_status_public_dict(provider))
 
     @app.get("/api/cmd/status")
     def status() -> tuple[Response, int]:
-        status_model = provider.printer_service.get_status()
-        return api_success(message="Printer status loaded.", data=asdict(status_model))
-
-    @app.post("/api/config/upload")
-    def upload_svg() -> tuple[Response, int]:
-        upload = request.files.get("svg") or request.files.get("file")
-        if upload is None:
-            return api_error("No SVG file uploaded.", error_code="SVG_REQUIRED", status_code=400)
-
-        payload = upload.read()
-        if not payload:
-            return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
-
-        model = runtime_state.set_uploaded_svg(upload.filename or "uploaded.svg", payload)
-        return api_success(
-            message="SVG uploaded successfully.",
-            data={
-                "fileName": model.file_name,
-                "sizeBytes": len(model.content),
-                "uploadedAt": _to_iso8601_utc(model.uploaded_at),
-            },
-            status_code=201,
-        )
+        return api_success(message="Printer status loaded.", data=_printer_status_public_dict(provider))
 
     @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:
@@ -1314,10 +1249,10 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
 
-        upload = request.files.get("svg")
+        upload = request.files.get("svg") or request.files.get("file")
         if upload is None:
             return api_error(
-                "SVG file is required on each print (multipart field 'svg').",
+                "SVG file is required on each print (multipart field 'svg' or 'file').",
                 error_code="SVG_REQUIRED",
                 status_code=400,
             )
@@ -1336,10 +1271,10 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
 
-        upload = request.files.get("svg")
+        upload = request.files.get("svg") or request.files.get("file")
         if upload is None:
             return api_error(
-                "SVG file is required on each bulk print (multipart field 'svg').",
+                "SVG file is required on each bulk print (multipart field 'svg' or 'file').",
                 error_code="SVG_REQUIRED",
                 status_code=400,
             )
@@ -1380,6 +1315,12 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def void_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
+            if provider.printer_service.is_voiding:
+                return api_error(
+                    "Void operation already running.",
+                    error_code="VOID_BUSY",
+                    status_code=409,
+                )
             if provider.printer_service.is_printing:
                 stop_requested = provider.printer_service.request_print_cancel()
                 if not stop_requested:
@@ -1443,7 +1384,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     @app.post("/api/config/reset")
     def reset() -> tuple[Response, int]:
-        if provider.printer_service.is_printing:
+        if provider.printer_service.is_busy:
             return api_error(
                 "Cannot reset while printer is busy.",
                 error_code="PRINTER_BUSY",
@@ -1461,16 +1402,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except Exception as ex:
             return api_error(f"Reset failed: {ex}", error_code="RESET_FAILED", status_code=500)
 
-        clear_uploaded_svg = parse_bool(payload.get("clearUploadedSvg"), default=False)
-        if clear_uploaded_svg:
-            runtime_state.clear_uploaded_svg()
-
         return api_success(
             message="Printer distance stats reset.",
-            data={
-                "stats": stats,
-                "clearedUploadedSvg": clear_uploaded_svg,
-            },
+            data={"stats": stats},
         )
 
     @app.post("/api/config/pen-max-distance")
@@ -1498,32 +1432,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Max pen distance updated.",
             data={"stats": stats},
         )
-
-    @app.post("/api/config/capture/request")
-    def request_capture() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        try:
-            response_payload = _trigger_capture_reset(capture_settings, payload)
-        except RuntimeError as ex:
-            return api_error(str(ex), error_code="CAPTURE_NOT_CONFIGURED", status_code=400)
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Capture reset endpoint responded with HTTP {ex.code}.",
-                error_code="CAPTURE_TRIGGER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach capture reset endpoint: {ex}",
-                error_code="CAPTURE_TRIGGER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Capture trigger failed: {ex}", error_code="CAPTURE_TRIGGER_FAILED", status_code=500)
-
-        return api_success("Capture reset command sent.", data=response_payload)
 
     def _scanner_manual_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
         """Strip API-only keys so they are never sent to the scanner session endpoints."""
@@ -1696,38 +1604,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data={"items": items, "days": days, "limit": limit},
         )
 
-    @app.get("/api/config/requests/<string:request_id>")
-    def get_request(request_id: str) -> tuple[Response, int]:
-        try:
-            request_uuid = UUID(request_id)
-        except ValueError:
-            return api_error("Invalid request ID format.", error_code="INVALID_REQUEST_ID", status_code=400)
-
-        log = _run_async(provider.print_approval_service.get_request_log_async(request_uuid))
-        if log is None:
-            return api_error(
-                f"Request log with ID {request_id} not found.",
-                error_code="REQUEST_NOT_FOUND",
-                status_code=404,
-            )
-        return api_success(message="Request log loaded.", data=log.to_dict())
-
-    @app.get("/api/config/requests")
-    def list_requests() -> tuple[Response, int]:
-        try:
-            count = int(request.args.get("count", "10"))
-            if count < 1:
-                count = 1
-            if count > 100:
-                count = 100
-        except ValueError:
-            return api_error("count must be an integer.", error_code="INVALID_COUNT", status_code=400)
-
-        logs = _run_async(provider.print_approval_service.get_recent_requests_async(count))
-        return api_success(
-            message="Recent request logs loaded.",
-            data=[entry.to_dict() for entry in logs],
-        )
+    run_startup_autoconnect(provider.printer_service)
 
     return app
 

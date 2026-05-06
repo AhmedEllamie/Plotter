@@ -32,14 +32,18 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         view_func=handlers["serial_port_check"],
         methods=["GET"],
     )
-    app.add_url_rule("/api/config/connect", endpoint="config_connect", view_func=handlers["connect"], methods=["POST"])
+    app.add_url_rule(
+        "/api/config/auto-connect",
+        endpoint="config_auto_connect",
+        view_func=handlers["auto_connect"],
+        methods=["POST"],
+    )
     app.add_url_rule(
         "/api/config/disconnect",
         endpoint="config_disconnect",
         view_func=handlers["disconnect"],
         methods=["POST"],
     )
-    app.add_url_rule("/api/config/upload", endpoint="config_upload", view_func=handlers["upload_svg"], methods=["POST"])
     app.add_url_rule(
         "/api/config/change-pen/start",
         endpoint="config_change_pen_start",
@@ -63,12 +67,6 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         "/api/config/pen-max-distance",
         endpoint="config_pen_max_distance",
         view_func=handlers["set_pen_max_distance"],
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/api/config/capture/request",
-        endpoint="config_capture_request",
-        view_func=handlers["request_capture"],
         methods=["POST"],
     )
     app.add_url_rule(
@@ -99,12 +97,6 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         "/api/config/scanner/manual-config",
         endpoint="config_scanner_manual_config",
         view_func=handlers["scanner_manual_config"],
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/api/config/scanner/focus-adjust",
-        endpoint="config_scanner_focus_adjust",
-        view_func=handlers["scanner_focus_adjust"],
         methods=["POST"],
     )
     app.add_url_rule(
@@ -153,17 +145,5 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         "/api/config/print-history",
         endpoint="config_print_history",
         view_func=handlers["print_history"],
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/api/config/requests/<string:request_id>",
-        endpoint="config_request_get",
-        view_func=handlers["get_request"],
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/api/config/requests",
-        endpoint="config_request_list",
-        view_func=handlers["list_requests"],
         methods=["GET"],
     )

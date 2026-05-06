@@ -20,6 +20,8 @@ Base URL example:
 
 `http://127.0.0.1:8008`
 
+Flask no longer exposes **`POST /api/config/scanner/focus-adjust`**. Call the scanner service **`POST /session/focus-adjust`** directly from your client (this document), or fold focus into **`POST /session/manual-config`**.
+
 ## 2) Required request sequence
 
 1. Set focus mode (autofocus on/off):

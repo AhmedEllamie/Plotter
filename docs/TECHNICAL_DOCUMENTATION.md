@@ -332,7 +332,7 @@ Not durable across process restart.
 - latest uploaded SVG
 - latest captured image
 
-Used by Flask endpoints to allow multi-step workflow (`upload` then `print`, capture retrieval endpoints, etc.).
+Used by Flask endpoints for optional in-memory assets (rectified capture, etc.). Print sends SVG with each `POST /api/cmd/print` request.
 
 Not durable across process restart.
 
@@ -344,14 +344,13 @@ Not durable across process restart.
 
 From `api/printer_controller.py`:
 
-- `POST /printer/connect`
+- `POST /printer/auto-connect`
 - `POST /printer/disconnect`
 - `GET /printer/status`
 - `POST /printer/generate`
 - `POST /printer/print`
 - `POST /printer/print/bulk`
 - `POST /printer/print-with-approval`
-- `GET /printer/requests/{request_id}`
 
 FastAPI validation style:
 - Raises HTTP 400/409/404 via `HTTPException`.
@@ -361,10 +360,9 @@ FastAPI validation style:
 From `flask_app/app.py`:
 
 Core printer:
-- `POST /api/config/connect`
+- `POST /api/config/auto-connect`
 - `POST /api/config/disconnect`
 - `GET /api/cmd/status`
-- `POST /api/config/upload`
 - `POST /api/cmd/print`
 - `POST /api/cmd/print/bulk`
 - `POST /api/cmd/bulk/stop`
@@ -376,13 +374,11 @@ Core printer:
 - `POST /api/config/pen-max-distance`
 
 Capture and scanner:
-- `POST /api/config/capture/request` (trigger external capture reset URL)
 - `POST /api/config/capture`
 - `GET /api/config/capture/latest`
 - `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg` (proxy stream)
 - `POST /api/config/scanner/manual-config`
-- `POST /api/config/scanner/focus-adjust`
 - `POST /api/config/scanner/capture/start`
 - `GET /api/config/scanner/capture/{capture_id}/status`
 - `GET /api/config/scanner/capture/{capture_id}/result`
@@ -395,8 +391,6 @@ System/config:
 - `GET /api/config`
 - `GET /api/config/serial-ports`
 - `GET /api/config/serial-port-check`
-- `GET /api/config/requests/{request_id}`
-- `GET /api/config/requests?count=10`
 
 Flask response envelope:
 - success: `{ success: true, message, data, errorCode: null }`
@@ -411,13 +405,11 @@ Flask response envelope:
 
 Configured in `flask_app/config.py` and consumed in `flask_app/app.py`.
 
-### 12.1 Capture Reset Trigger
+### 12.1 External capture reset (`CAPTURE_*` env)
 
-`POST /api/capture/request` sends HTTP request to external reset endpoint using:
-- `CAPTURE_RESET_URL` (required for this feature)
-- `CAPTURE_RESET_TOKEN` (optional bearer token)
-- `CAPTURE_RESET_TIMEOUT_SECONDS`
-- `CAPTURE_RESET_METHOD` (GET/POST/etc)
+The Flask route that proxied **`POST /api/config/capture/request`** was removed. Operators or external automation should call **`CAPTURE_RESET_URL`** directly if needed.
+
+`captureResetConfigured` on **`GET /api/config`** and **`GET /api/cmd/health`** still reflects whether `CAPTURE_RESET_URL` is set.
 
 ### 12.2 Scanner Service HTTP Calls
 
@@ -446,8 +438,8 @@ Served by Flask static files:
 - Configuration page (`/configuration`)
 
 Capabilities include:
-- printer connect/disconnect/status
-- SVG upload + print
+- printer AutoConnect/disconnect/status
+- SVG attach-to-print workflow (multipart on each job)
 - bulk print and stop
 - void print
 - pen change commands
@@ -539,6 +531,10 @@ When `appsettings.json` exists at the repo root, these sections are read:
 - `Printer` (`ComPort`, `BaudRate`)
 - `PrintRetry` (`MaxRetries`, `RetryDelayMs`)
 - `ApprovalService` (`Endpoint`, `ApiKey`, `TimeoutSeconds`, `UseMockService`)
+
+### 16.4 Printer serial (startup)
+
+- `AUTO_CONNECT_ON_STARTUP` — when **unset** or not one of `0` / `false` / `no` / `off` (case-insensitive), **Flask** and **FastAPI** call `PrinterService.autoconnect()` **once** at process startup. On failure, logs a warning and continues (no crash). Set to `0` (etc.) to disable (e.g. development without a plotter).
 
 ---
 

@@ -1,5 +1,4 @@
 const STORAGE_KEY = "automatedSignature.v1";
-const DEFAULT_API_KEY = "QSCWDVEFBRGN";
 
 const DEFAULT_PRINT_SETTINGS = {
   width: "210mm",
@@ -17,7 +16,7 @@ const DEFAULT_PRINT_SETTINGS = {
 const DEFAULT_CONNECTION_SETTINGS = {
   comPort: "",
   baudRate: 250000,
-  apiKey: DEFAULT_API_KEY,
+  apiKey: "",
 };
 
 const DEFAULT_CAPTURE_SETTINGS = {
@@ -44,7 +43,7 @@ function parseApiResponse(response) {
 
 function buildAuthHeaders() {
   const connection = loadConnectionSettings();
-  const apiKey = String(connection.apiKey || DEFAULT_API_KEY).trim();
+  const apiKey = String(connection.apiKey || "").trim();
   if (!apiKey) {
     return {};
   }

@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,11 +20,20 @@ except ImportError:  # pragma: no cover - depends on environment
     serial = None
 
 
+AUTCONNECT_PROBE_CAP = 32
+
+
+class AutoConnectFailedError(RuntimeError):
+    def __init__(self, message: str, *, attempted_ports: list[str]) -> None:
+        super().__init__(message)
+        self.attempted_ports = attempted_ports
+
+
 class PrinterService(IPrinterService):
     def __init__(self, settings: PrinterSettings):
         self._settings = settings
         self._port: Any | None = None
-        self._is_printing = False
+        self._busy_kind: str = "idle"
         self._print_lock = threading.Lock()
         self._distance_lock = threading.Lock()
         self._stats_file = Path(__file__).resolve().parents[2] / "distance_stats.json"
@@ -48,7 +58,15 @@ class PrinterService(IPrinterService):
 
     @property
     def is_printing(self) -> bool:
-        return self._is_printing
+        return self._busy_kind == "print"
+
+    @property
+    def is_busy(self) -> bool:
+        return self._busy_kind != "idle"
+
+    @property
+    def is_voiding(self) -> bool:
+        return self._busy_kind == "void"
 
     @property
     def default_com_port(self) -> str:
@@ -85,6 +103,70 @@ class PrinterService(IPrinterService):
         self._port.reset_input_buffer()
         self._port.reset_output_buffer()
 
+    @staticmethod
+    def list_filtered_serial_device_names() -> list[str]:
+        try:
+            from serial.tools import list_ports
+        except ImportError:
+            return []
+
+        names: list[str] = []
+        is_windows = sys.platform.startswith("win")
+        is_linux = sys.platform.startswith("linux")
+        try:
+            for p in list_ports.comports():
+                device = (p.device or "").strip()
+                if not device:
+                    continue
+                if is_windows and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
+                    continue
+                if is_linux:
+                    if not re.fullmatch(r"(?:/dev/)?tty(?:USB|ACM)\d+", device, flags=re.IGNORECASE):
+                        continue
+                    if not device.startswith("/dev/"):
+                        device = f"/dev/{device}"
+                if is_windows:
+                    device = device.upper()
+                names.append(device)
+        except Exception:
+            return []
+        names = list(dict.fromkeys(names))
+        names.sort()
+        return names
+
+    def autoconnect(self, explicit_com_port: str | None = None, baud_rate: int | None = None) -> None:
+        if serial is None:
+            raise RuntimeError("pyserial is not installed. Install requirements first.")
+        baud = baud_rate or self._settings.baud_rate
+        attempted: list[str] = []
+        explicit = (explicit_com_port or "").strip()
+        if explicit:
+            targets = [explicit]
+        else:
+            targets = []
+            default = (self._settings.com_port or "").strip()
+            if default:
+                targets.append(default)
+            for name in self.list_filtered_serial_device_names():
+                if name not in targets:
+                    targets.append(name)
+            targets = targets[:AUTCONNECT_PROBE_CAP]
+        if not targets:
+            raise AutoConnectFailedError("No serial ports to try.", attempted_ports=[])
+        last_err = ""
+        for port in targets:
+            attempted.append(port)
+            try:
+                self.open_port(port, baud)
+                return
+            except Exception as ex:
+                last_err = str(ex)
+                self.close_port()
+        raise AutoConnectFailedError(
+            f"Could not open any serial port. Last error: {last_err}",
+            attempted_ports=attempted,
+        )
+
     def close_port(self) -> None:
         if self._port and self._port.is_open:
             self._port.close()
@@ -99,6 +181,7 @@ class PrinterService(IPrinterService):
         return PrinterStatus(
             is_open=self.is_open,
             port_name=self.port_name,
+            is_busy=self.is_busy,
             is_printing=self.is_printing,
             bulk_requested_total=self._bulk_requested_total,
             bulk_printed_count=self._bulk_printed_count,
@@ -198,7 +281,7 @@ class PrinterService(IPrinterService):
             self._end_print_job()
 
     async def void_print(self) -> PrintResponse:
-        self._begin_print_job()
+        self._begin_busy("void")
         try:
             await asyncio.to_thread(self._execute_void_cycle)
             return PrintResponse(
@@ -206,11 +289,11 @@ class PrinterService(IPrinterService):
                 commands_sent=0,
             )
         finally:
-            self._end_print_job()
+            self._end_busy()
 
     def request_print_cancel(self) -> bool:
         with self._print_lock:
-            if not self._is_printing:
+            if self._busy_kind != "print":
                 return False
             self._stop_requested.set()
             return True
@@ -219,7 +302,7 @@ class PrinterService(IPrinterService):
         return self.request_print_cancel()
 
     async def pen_change_start(self) -> PrintResponse:
-        self._begin_print_job()
+        self._begin_busy("pen_change")
         try:
             await asyncio.to_thread(self._execute_pen_change_start)
             return PrintResponse(
@@ -227,10 +310,10 @@ class PrinterService(IPrinterService):
                 commands_sent=2,
             )
         finally:
-            self._end_print_job()
+            self._end_busy()
 
     async def pen_change_finish(self) -> PrintResponse:
-        self._begin_print_job()
+        self._begin_busy("pen_change")
         try:
             await asyncio.to_thread(self._execute_pen_change_finish)
             return PrintResponse(
@@ -238,11 +321,29 @@ class PrinterService(IPrinterService):
                 commands_sent=2,
             )
         finally:
-            self._end_print_job()
+            self._end_busy()
+
+    def _end_busy(self) -> None:
+        with self._print_lock:
+            self._busy_kind = "idle"
+
+    def _begin_busy(self, kind: str) -> None:
+        with self._print_lock:
+            if self._busy_kind != "idle":
+                raise RuntimeError("Printer is busy.")
+            self._busy_kind = kind
+            if kind == "print":
+                self._stop_requested.clear()
+                self._bulk_requested_total = 0
+                self._bulk_printed_count = 0
+                self._current_svg_total_distance_mm = 0.0
+                self._current_executed_distance_mm = 0.0
+
+    def _begin_print_job(self) -> None:
+        self._begin_busy("print")
 
     def _end_print_job(self) -> None:
-        with self._print_lock:
-            self._is_printing = False
+        self._end_busy()
 
     def _execute_print_cycle(self, gcode: list[str]) -> dict[str, float | int]:
         state = {"x": 0.0, "y": 0.0, "pen_down": False}
@@ -457,17 +558,6 @@ class PrinterService(IPrinterService):
             self._max_pen_distance_m = meters
             self._save_cumulative_distance()
         return self.get_distance_stats()
-
-    def _begin_print_job(self) -> None:
-        with self._print_lock:
-            if self._is_printing:
-                raise RuntimeError("Printer is busy.")
-            self._is_printing = True
-            self._stop_requested.clear()
-            self._bulk_requested_total = 0
-            self._bulk_printed_count = 0
-            self._current_svg_total_distance_mm = 0.0
-            self._current_executed_distance_mm = 0.0
 
     def _throw_if_stop_requested(self) -> None:
         if self._stop_requested.is_set():

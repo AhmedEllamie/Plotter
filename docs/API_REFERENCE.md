@@ -12,7 +12,7 @@ Examples use:
 | Placeholder | Value                                                             |
 | ----------- | ----------------------------------------------------------------- |
 | Base URL    | `http://127.0.0.1:5000`                                           |
-| API key     | `QSCWDVEFBRGN` (default in code; override with `PLOTTER_API_KEY`) |
+| API key for examples | Configure the same key in browser **Configuration → API Key** only when `PLOTTER_API_KEY` is set on the server. |
 
 
 All JSON success bodies wrap payloads in the [standard envelope](#global-envelope-auth-http-status) (`success`, `message`, `data`, `errorCode`, `details`). Field order in JSON may vary.
@@ -71,17 +71,29 @@ HTTP status: `401`.
 
 | Location    | Name               | Type     | Required    | Description                                                                                                                                       |
 | ----------- | ------------------ | -------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HTTP header | `X-API-Key`        | `string` | Yes*        | API key; env `PLOTTER_API_KEY` or default in `[api_key_auth.py](../plotter-signature/plotter_signature/infrastructure/security/api_key_auth.py)`. |
-| Cookie      | `plotter_api_auth` | `string` | Alternative | Set after a successful request that sent `X-API-Key`; used for `<img>` / stream URLs that cannot send headers.                                    |
+| HTTP header | `X-API-Key`        | `string` | When `PLOTTER_API_KEY` is set | Must match server key or request returns **401**. |
+| Cookie      | `plotter_api_auth` | `string` | Alternative                     | Set after a successful request that sent `X-API-Key`; used for `<img>` / stream URLs that cannot send headers. |
 
 
-If the cookie is already valid, the header may be omitted.
+When **`PLOTTER_API_KEY` is unset or empty** on the server, API key authentication is **disabled** and requests **do not** need `X-API-Key`.
+
+When **`PLOTTER_API_KEY` is set**, **all** `/api/*` routes require a matching `X-API-Key` (missing or invalid → **401**).
 
 
-| `errorCode`           | HTTP | Meaning                       |
-| --------------------- | ---- | ----------------------------- |
-| `UNAUTHORIZED`        | 401  | Missing or wrong key.         |
-| `AUTH_NOT_CONFIGURED` | 503  | Server auth misconfiguration. |
+If the cookie is already valid, the header may be omitted (**only when** server auth is enabled).
+
+
+| `errorCode`           | HTTP | Meaning               |
+| --------------------- | ---- | --------------------- |
+| `UNAUTHORIZED`        | 401  | Missing or wrong key. |
+
+
+### Changing the server API key
+
+1. On the plotter host, set or update **`PLOTTER_API_KEY`** in the environment (or in the systemd override / `.env` file used at service start).
+2. **Restart** the Flask (or FastAPI) process so the new value loads.
+3. Update every client (**Configuration page saved API Key**, kiosk env / key file if used, integrations) so they send the same value in **`X-API-Key`**.
+4. Omit `PLOTTER_API_KEY` entirely on the server if you want authentication **disabled** (open LAN installs only).
 
 
 ### Static HTML (no API key)
@@ -123,7 +135,7 @@ Common header: `**X-API-Key**`: `string`.
 | Field                    | Type      | Description                                           |
 | ------------------------ | --------- | ----------------------------------------------------- |
 | `printerConnected`       | `boolean` | Serial port open.                                     |
-| `printerBusy`            | `boolean` | `is_printing` from printer service.                   |
+| `printerBusy`            | `boolean` | `true` when the printer is busy (print, bulk, void, or pen change). |
 | `captureResetConfigured` | `boolean` | `CAPTURE_RESET_URL` set (see `FlaskCaptureSettings`). |
 
 
@@ -161,14 +173,14 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 | —        | —    | —    | —        | No parameters. |
 
 
-**Success `data` object — full `PrinterStatus` (every key returned)**
+**Success `data` object — public `PrinterStatus` (serial port name is not exposed on this route)**
 
 
 | Field                           | Type      | Description                                               |
 | ------------------------------- | --------- | --------------------------------------------------------- |
 | `is_open`                       | `boolean` | `true` if serial port is open.                            |
-| `port_name`                     | `string`  | Connected port, e.g. `COM3`, or `"N/A"`.                  |
-| `is_printing`                   | `boolean` | `true` during print / bulk / pen cycle / void.            |
+| `is_busy`                       | `boolean` | `true` during print, bulk, void, or pen change.         |
+| `is_printing`                   | `boolean` | `true` only during **print** or **bulk** jobs.          |
 | `bulk_requested_total`          | `integer` | Bulk job: total copies requested (last bulk job context). |
 | `bulk_printed_count`            | `integer` | Bulk job: copies completed.                               |
 | `bulk_stop_requested`           | `boolean` | Cooperative cancel flag set.                              |
@@ -186,7 +198,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 **Example request**
 
 ```bash
-curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/status"
+curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 ```
 
 **Example response** `200`
@@ -197,7 +209,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/status"
   "message": "Printer status loaded.",
   "data": {
     "is_open": true,
-    "port_name": "COM3",
+    "is_busy": false,
     "is_printing": false,
     "bulk_requested_total": 0,
     "bulk_printed_count": 0,
@@ -223,7 +235,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/status"
 | Location    | Name               | Type                             | Required | Default | Description                                                                                             |
 | ----------- | ------------------ | -------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
 | Header      | `Content-Type`     | `string`                         | Yes      | —       | Must be `multipart/form-data`.                                                                          |
-| Multipart   | `svg`              | `file` (bytes)                   | **Yes**  | —       | SVG file for this request only.                                                                         |
+| Multipart   | `svg` or `file`    | `file` (bytes)                   | **Yes** one of | —       | SVG file for this request only. |
 | Multipart   | `printRequestJson` | `string`                         | No       | —       | Stringified JSON; may contain nested `printRequest` with `[PrintRequest](#printrequest-fields)` fields. |
 | Multipart   | (flat keys)        | `string` / `integer` / `boolean` | No       | —       | Any `[PrintRequest](#printrequest-fields)` keys as form fields (e.g. `scale`, `xPosition`).             |
 | Body (JSON) | (entire body)      | `object`                         | No       | —       | Used only if JSON present: top-level keys or nested `printRequest` (see `_extract_print_payload`).      |
@@ -348,7 +360,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
 ```json
 {
   "success": false,
-  "message": "Printer is not connected. Call POST /api/config/connect first.",
+  "message": "Printer is not connected. Call POST /api/config/auto-connect first.",
   "data": null,
   "errorCode": "PRINTER_STATE_ERROR",
   "details": null
@@ -695,13 +707,19 @@ curl -sS -G -H "X-API-Key: QSCWDVEFBRGN" \
 
 ---
 
-#### `POST /api/config/connect`
+#### `POST /api/config/auto-connect`
+
+Opens the printer serial link. **`comPort` / `com_port`** selects one device; **`{}`** runs **AutoConnect**: default COM from server settings, then filtered serial candidates.
+
+**Errors:** `400` `AUTO_CONNECT_FAILED` (`details.attemptedPorts`), `409` `ALREADY_CONNECTED`.
+
+**Startup:** Flask and FastAPI also run this resolver once when the process starts (**enabled by default**) unless **`AUTO_CONNECT_ON_STARTUP`** is `0`, `false`, `no`, or `off`; failures are logged and the server still listens.
 
 **Example request**
 
 ```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/connect" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
+curl -sS -X POST "http://127.0.0.1:5000/api/config/auto-connect" \
+  -H "X-API-Key: YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"comPort\":\"COM3\",\"baudRate\":115200}"
 ```
@@ -715,6 +733,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/connect" \
   "data": {
     "is_open": true,
     "port_name": "COM3",
+    "is_busy": false,
     "is_printing": false,
     "bulk_requested_total": 0,
     "bulk_printed_count": 0,
@@ -745,6 +764,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/connect" \
   "data": {
     "is_open": false,
     "port_name": "N/A",
+    "is_busy": false,
     "is_printing": false,
     "bulk_requested_total": 0,
     "bulk_printed_count": 0,
@@ -764,35 +784,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/connect" \
 
 ---
 
-### Config — SVG upload & pen maintenance
-
-#### `POST /api/config/upload`
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/upload" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
-  -F "svg=@./signature.svg;type=image/svg+xml"
-```
-
-**Example response** `201`
-
-```json
-{
-  "success": true,
-  "message": "SVG uploaded successfully.",
-  "data": {
-    "fileName": "signature.svg",
-    "sizeBytes": 4521,
-    "uploadedAt": "2026-04-28T14:32:01.123456+00:00"
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
----
+### Config — Pen maintenance
 
 #### `POST /api/config/change-pen/start`
 
@@ -880,7 +872,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen" \
 curl -sS -X POST "http://127.0.0.1:5000/api/config/reset" \
   -H "X-API-Key: QSCWDVEFBRGN" \
   -H "Content-Type: application/json" \
-  -d "{\"maxPenDistanceM\":3.0,\"clearUploadedSvg\":true}"
+  -d "{\"maxPenDistanceM\":3.0}"
 ```
 
 **Example response** `200`
@@ -898,8 +890,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/reset" \
       "maxPenDistanceM": 3.0,
       "usedPenDistanceM": 0.0,
       "remainingPenPercent": 100.0
-    },
-    "clearedUploadedSvg": true
+    }
   },
   "errorCode": null,
   "details": null
@@ -996,19 +987,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/scanner/manual-config" \
   "errorCode": null,
   "details": null
 }
-```
-
----
-
-#### `POST /api/config/scanner/focus-adjust`
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/scanner/focus-adjust" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
-  -H "Content-Type: application/json" \
-  -d "{\"direction\":\"farther\",\"step\":1}"
 ```
 
 ---
@@ -1310,16 +1288,15 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | ------ | ------------------------------- |
 | `GET`  | `/api/config/serial-ports`      |
 | `GET`  | `/api/config/serial-port-check` |
-| `POST` | `/api/config/connect`           |
+| `POST` | `/api/config/auto-connect`     |
 | `POST` | `/api/config/disconnect`        |
 
 
-**SVG upload & pen maintenance**
+**Pen maintenance**
 
 
 | Method | Path                            |
 | ------ | ------------------------------- |
-| `POST` | `/api/config/upload`            |
 | `POST` | `/api/config/change-pen/start`  |
 | `POST` | `/api/config/change-pen/finish` |
 | `POST` | `/api/config/change-pen`        |
@@ -1334,7 +1311,6 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | ------ | ----------------------------------- |
 | `GET`  | `/api/config/scanner/stream.mjpg`   |
 | `POST` | `/api/config/scanner/manual-config` |
-| `POST` | `/api/config/scanner/focus-adjust`  |
 
 
 **Capture** (single-shot scanner storage)
@@ -1345,17 +1321,15 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | `POST` | `/api/config/scanner/capture/oneshot` |
 
 
-**Print history & approval logs**
+**Print history**
 
 
 | Method | Path                                |
 | ------ | ----------------------------------- |
 | `GET`  | `/api/config/print-history`         |
-| `GET`  | `/api/config/requests/{request_id}` |
-| `GET`  | `/api/config/requests`              |
 
 
-**Total:** 2 static routes + **24** Flask JSON/binary API routes under `/api/`*.
+**Total:** 2 static routes + Flask JSON/binary API routes under `/api/*` (see tables above).
 
 ---
 

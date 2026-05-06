@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: status after stop request
+- Success data: minimal stop acknowledgment (e.g. **jobStopped**); **`GET /api/cmd/status`** for live state — not full nested status blob
 
 ## Error Response
 - Error envelope:

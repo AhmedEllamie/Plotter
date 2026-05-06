@@ -21,4 +21,4 @@
   - data: null
   - errorCode: endpoint error code
   - details: optional extra details
-- Errors: VOID_RUNTIME_ERROR (409), VOID_FAILED (500)
+- Errors: **VOID_BUSY** (409) if a void is already in progress; VOID_RUNTIME_ERROR (409), VOID_FAILED (500)
