@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Serial devices are usually group dialout. Ensures /dev/ttyUSB* and /dev/ttyACM* open after
+# reboot without a login shell; add the desktop user to dialout too: usermod -aG dialout <user>.
+SupplementaryGroups=dialout
 WorkingDirectory=/opt/plotter-signature
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0

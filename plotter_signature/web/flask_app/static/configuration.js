@@ -574,8 +574,12 @@ function registerPersistenceListeners() {
 
 function buildStreamUrl() {
   const capture = readCaptureSettingsForm();
+  const conn = readConnectionForm();
   const params = new URLSearchParams();
   params.set("fisheye", capture.streamFisheye ? "1" : "0");
+  if (conn.apiKey) {
+    params.set("token", conn.apiKey);
+  }
   return `/api/config/scanner/stream.mjpg?${params.toString()}`;
 }
 

@@ -20,14 +20,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
-from flask import Flask, Response, g, request, send_file, send_from_directory
+from flask import Flask, Response, request, send_file, send_from_directory
 
 from plotter_signature.dependency_injection import ServiceProvider, get_service_provider
 from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
-    get_configured_api_key,
     is_api_key_required,
+    stream_query_token_is_valid,
     validate_api_key,
 )
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
@@ -402,7 +402,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     ui_profile_path = _default_ui_profile_path()
     ui_profile_exists = ui_profile_path.exists()
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
-    api_auth_cookie_name = "plotter_api_auth"
+    _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -561,15 +561,23 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not request.path.startswith("/api/"):
             return None
 
+        if not is_api_key_required():
+            return None
+
         header_api_key = (request.headers.get(API_KEY_HEADER) or "").strip()
-        cookie_api_key = (request.cookies.get(api_auth_cookie_name) or "").strip()
-        provided_api_key = header_api_key or cookie_api_key
-        validation = validate_api_key(provided_api_key)
+        if request.method == "GET" and request.path.rstrip("/") == _SCANNER_STREAM_PATH.rstrip("/"):
+            if validate_api_key(header_api_key).is_valid:
+                return None
+            if stream_query_token_is_valid(request.args.get("token")):
+                return None
+            return api_error(
+                f"Missing or invalid {API_KEY_HEADER} header or token query parameter.",
+                error_code="UNAUTHORIZED",
+                status_code=401,
+            )
+
+        validation = validate_api_key(header_api_key)
         if validation.is_valid:
-            # If a request came with a valid header key, persist auth for browser subresource
-            # requests (like <img src="/api/config/scanner/stream.mjpg">) that cannot send
-            # custom headers.
-            g.issue_api_auth_cookie = bool(header_api_key)
             return None
 
         return api_error(
@@ -577,25 +585,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             error_code="UNAUTHORIZED",
             status_code=401,
         )
-
-    @app.after_request
-    def issue_api_auth_cookie(response: Response) -> Response:
-        if (
-            bool(getattr(g, "issue_api_auth_cookie", False))
-            and is_api_key_required()
-        ):
-            configured = get_configured_api_key()
-            if configured:
-                response.set_cookie(
-                    key=api_auth_cookie_name,
-                    value=configured,
-                    max_age=60 * 60 * 24 * 7,
-                    httponly=True,
-                    samesite="Lax",
-                    secure=False,
-                    path="/",
-                )
-        return response
 
     def _merge_scanner_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
         merged = dict(payload)

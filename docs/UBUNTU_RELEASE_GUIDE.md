@@ -76,8 +76,8 @@ sudo nano /etc/systemd/system/plotter-signature-flask.service
 
 Important fields:
 
-- `User` should be your deployment user.
-- `Group` should usually be `dialout` for serial access.
+- `User` should be your deployment user (the example unit uses `root`; many sites override to a dedicated account).
+- When not `root`, ensure **serial access**: user in **`dialout`** and the unit sets **`SupplementaryGroups=dialout`** (already present in the bundled service files).
 - `WorkingDirectory` should be your repo path.
 - `ExecStart` should point to that repo `.venv` Python.
 
@@ -123,6 +123,17 @@ Common checks:
 - Printer connect fails:
   - verify `/dev/ttyUSB0` or `/dev/ttyACM0`.
   - verify user/group has `dialout`.
+  - see **USB serial permissions** below.
+
+### USB serial permissions (`Permission denied`)
+
+USB serial devices are usually owned by **`root:dialout`** with mode **`660`**. The account that runs Flask, the CLI, or the Desktop App must be able to read/write that node.
+
+1. **One-time (persistent across reboot):** `sudo usermod -aG dialout <service_user>` then log out/in, or restart the service. Group membership is stored in `/etc/group`, not lost on reboot.
+2. **systemd:** the bundled [`plotter-signature-flask.service`](../deploy/ubuntu/plotter-signature-flask.service) and [`plotter-pen-kiosk.service`](../deploy/ubuntu/plotter-pen-kiosk.service) include **`SupplementaryGroups=dialout`** so the service process receives the `dialout` group without relying on a login shell. After editing a unit: `sudo systemctl daemon-reload` and restart the service (user units: `systemctl --user daemon-reload`).
+3. **Checks:** `ls -l /dev/ttyUSB* /dev/ttyACM*`; ensure another process is not holding the port (`sudo lsof /dev/ttyUSB0`).
+
+The example Flask unit ships **`User=root`** (root bypasses `dialout`), but production often overrides **`User=`** to a non-root account; then **`dialout`** + **`SupplementaryGroups`** matter.
 
 ## 8) Update deployment (new release)
 

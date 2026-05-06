@@ -86,15 +86,22 @@ class PrinterService(IPrinterService):
         if self._port and self._port.is_open:
             self._port.close()
 
-        self._port = serial.Serial(
-            port=port_name,
-            baudrate=baud,
-            parity=serial.PARITY_NONE,
-            bytesize=serial.EIGHTBITS,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=0,
-            write_timeout=2.0,
-        )
+        try:
+            self._port = serial.Serial(
+                port=port_name,
+                baudrate=baud,
+                parity=serial.PARITY_NONE,
+                bytesize=serial.EIGHTBITS,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=0,
+                write_timeout=2.0,
+            )
+        except PermissionError as ex:
+            raise PermissionError(
+                f"{ex!s} On Linux, add the service user to the 'dialout' group "
+                "(e.g. sudo usermod -aG dialout <user>), use SupplementaryGroups=dialout in the "
+                "bundled systemd unit when non-root, and see docs/UBUNTU_RELEASE_GUIDE.md."
+            ) from ex
 
         # Match the C# serial settings and startup delay.
         self._port.dtr = True

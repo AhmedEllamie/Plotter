@@ -25,6 +25,8 @@ If the server sets **`PLOTTER_API_KEY`**, every `/api/*` request must send that 
 
 If **`PLOTTER_API_KEY`** is **unset or empty** on the server, you do **not** need this header.
 
+**Scanner stream in a browser:** `GET /api/config/scanner/stream.mjpg` also accepts query **`token`** (must match **`PLOTTER_API_KEY`**, or **`PLOTTER_STREAM_TOKEN`** if set) because `<img src="...">` cannot send `X-API-Key`. The configuration page appends **`token`** from the saved API key. In Postman, keep sending **`X-API-Key`** on all requests.
+
 Invalid or missing key when required → **HTTP 401** and JSON:
 
 ```json
@@ -36,8 +38,6 @@ Invalid or missing key when required → **HTTP 401** and JSON:
   "details": null
 }
 ```
-
-**Streams and images in a browser** can use a `plotter_api_auth` cookie after a successful keyed request; in Postman you normally keep sending `X-API-Key`.
 
 ### Standard JSON envelope
 
@@ -170,7 +170,7 @@ python -m plotter_signature.cli disconnect
 
 | Method | Path | Params / body | Typical success |
 | ------ | ---- | ------------- | --------------- |
-| GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1) | **200** MJPEG stream (binary) |
+| GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1); when `PLOTTER_API_KEY` is set, also `token` (same as main key, or `PLOTTER_STREAM_TOKEN` if set) **or** header `X-API-Key` | **200** MJPEG stream (binary) |
 
 Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section. Scanner-related `errorCode` examples: `SCANNER_CONFIG_REQUIRED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, `SCANNER_CAPTURE_FAILED`, stream: `SCANNER_STREAM_*`.
 
