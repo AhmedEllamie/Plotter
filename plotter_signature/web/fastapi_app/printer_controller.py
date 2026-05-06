@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import io
 import json
@@ -18,13 +17,13 @@ from plotter_signature.domain.contracts import (
     parse_paper,
 )
 from plotter_signature.infrastructure.security.api_key_auth import is_api_key_required, validate_api_key
-from plotter_signature.services.printer.printer_service import AutoConnectFailedError
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 
 
 def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
     payload = asdict(provider.printer_service.get_status())
     payload.pop("port_name", None)
+    payload.pop("is_open", None)
     return payload
 
 
@@ -56,7 +55,10 @@ def _ensure_connected(provider: ServiceProvider) -> None:
     if not provider.printer_service.is_open:
         raise HTTPException(
             status_code=400,
-            detail="Printer is not connected. Call POST /printer/auto-connect first.",
+            detail=(
+                "Printer is not connected. Ensure the server process has opened the serial port "
+                "(startup autoconnect / deployment configuration)."
+            ),
         )
 
 
@@ -115,39 +117,6 @@ def _require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-K
 def create_printer_router(provider: ServiceProvider | None = None) -> APIRouter:
     provider = provider or get_service_provider()
     router = APIRouter(prefix="/printer", tags=["printer"], dependencies=[Depends(_require_api_key)])
-
-    @router.post("/auto-connect")
-    async def auto_connect(com_port: str | None = None, baud_rate: int | None = None):
-        if provider.printer_service.is_open:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Already connected to {provider.printer_service.port_name}. Disconnect first.",
-            )
-        try:
-            await asyncio.to_thread(
-                provider.printer_service.autoconnect,
-                com_port,
-                baud_rate,
-            )
-        except AutoConnectFailedError as ex:
-            raise HTTPException(
-                status_code=400,
-                detail=str(ex),
-            ) from ex
-        except Exception as ex:
-            raise HTTPException(status_code=400, detail=f"Failed to auto-connect: {ex}") from ex
-
-        return {"message": f"Connected to {provider.printer_service.port_name}."}
-
-    @router.post("/disconnect")
-    async def disconnect():
-        if not provider.printer_service.is_open:
-            raise HTTPException(status_code=409, detail="Not connected.")
-        if provider.printer_service.is_busy:
-            raise HTTPException(status_code=409, detail="Cannot disconnect while printer is busy.")
-
-        provider.printer_service.close_port()
-        return {"message": "Disconnected."}
 
     @router.get("/status")
     async def get_status():

@@ -2,13 +2,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
 import threading
 from pathlib import Path
 from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
+
+try:
+    import serial
+    from serial.tools import list_ports
+except ImportError as _serial_import_error:  # pragma: no cover - optional until pyserial installed
+    serial = None  # type: ignore[assignment]
+    list_ports = None  # type: ignore[assignment]
+    _SERIAL_IMPORT_ERROR = _serial_import_error
+else:
+    _SERIAL_IMPORT_ERROR = None
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 _DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
+
+_KIOSK_SERIAL_BAUD = 250000
 
 
 def _kiosk_settings_path() -> Path:
@@ -74,13 +88,16 @@ class PenKioskApp:
 
         self._status_poll_ms = 3000
         self._api_busy = False
+        self._serial_lock = threading.Lock()
+        self._local_serial: object | None = None
+        self._http_ok = False
 
         self._server_url_var = StringVar(value=self._api_base_url)
         self._com_port_var = StringVar(value=saved.get("com_port_override", ""))
 
-        self._connection_badge = StringVar(value="Disconnected")
+        self._connection_badge = StringVar(value="USB: Disconnected")
         self._busy_badge = StringVar(value="Idle")
-        self._port_value = StringVar(value="--")
+        self._local_usb_status_var = StringVar(value="Local USB: not connected")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
         self._execution_percent_value = StringVar(value="0.00%")
@@ -193,7 +210,22 @@ class PenKioskApp:
             insertbackground="#f8fafc",
             relief="flat",
         ).pack(fill=X, ipady=6, pady=(2, 6))
-        Label(conn_box, text="COM override (optional, empty = server AutoConnect)", bg="#111827", fg="#94a3b8", font=("Segoe UI", 11, "bold")).pack(
+        apply_row = Frame(conn_box, bg="#111827")
+        apply_row.pack(fill=X, pady=(0, 10))
+        Button(
+            apply_row,
+            text="Apply server",
+            command=self._apply_server_url,
+            bg="#334155",
+            fg="#ffffff",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=16,
+            pady=10,
+            font=("Segoe UI", 12, "bold"),
+            cursor="hand2",
+        ).pack(side=LEFT)
+        Label(conn_box, text="Local USB serial (this PC)", bg="#111827", fg="#94a3b8", font=("Segoe UI", 11, "bold")).pack(
             anchor="w"
         )
         Entry(
@@ -208,9 +240,9 @@ class PenKioskApp:
         btn_row = Frame(conn_box, bg="#111827")
         btn_row.pack(fill=X)
         for text, cmd, bgc in (
-            ("Apply server", self._apply_server_url, "#334155"),
-            ("AutoConnect", self._run_autoconnect, "#0ea5e9"),
-            ("Disconnect", self._run_disconnect, "#64748b"),
+            ("Scan ports", self._scan_local_ports, "#334155"),
+            ("Connect", self._connect_local_serial, "#0ea5e9"),
+            ("Disconnect USB", self._disconnect_local_serial, "#64748b"),
         ):
             Button(
                 btn_row,
@@ -225,6 +257,15 @@ class PenKioskApp:
                 font=("Segoe UI", 12, "bold"),
                 cursor="hand2",
             ).pack(side=LEFT, padx=(0, 8))
+        Label(
+            conn_box,
+            textvariable=self._local_usb_status_var,
+            bg="#111827",
+            fg="#cbd5e1",
+            font=("Segoe UI", 12),
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
 
     def _build_status_card(self, parent: Frame) -> None:
         Label(
@@ -261,7 +302,6 @@ class PenKioskApp:
         self._busy_badge_label = self._badge(badges_row, self._busy_badge, ok=True)
         self._busy_badge_label.pack(side=LEFT)
 
-        self._metric_row(parent, "COM override display", self._port_value)
         self._metric_row(parent, "Cumulative distance", self._cumulative_distance_value)
         self._metric_row(parent, "Executed distance", self._executed_distance_value)
         self._metric_row(parent, "Execution progress", self._execution_percent_value)
@@ -444,20 +484,115 @@ class PenKioskApp:
         current = bool(self._root.attributes("-fullscreen"))
         self._root.attributes("-fullscreen", not current)
 
-    def _set_connection_visual(self, state: str) -> None:
-        """state: connected | disconnected | unreachable"""
+    def _is_local_serial_open(self) -> bool:
+        with self._serial_lock:
+            port = self._local_serial
+            return port is not None and bool(getattr(port, "is_open", False))
+
+    def _set_usb_lamp(self, connected: bool) -> None:
         if self._connection_lamp_canvas is None or self._connection_lamp_oval is None:
             return
-        if state == "connected":
+        if connected:
             fill, outline = "#22c55e", "#15803d"
-            self._link_detail_var.set("Plotter link: connected")
-        elif state == "unreachable":
-            fill, outline = "#94a3b8", "#475569"
-            self._link_detail_var.set("Server unreachable — check Printer IP")
         else:
             fill, outline = "#ef4444", "#b91c1c"
-            self._link_detail_var.set("Plotter link: disconnected (port closed)")
         self._connection_lamp_canvas.itemconfig(self._connection_lamp_oval, fill=fill, outline=outline)
+
+    def _update_link_detail_line(self) -> None:
+        http = "OK" if self._http_ok else "unreachable"
+        usb = "open" if self._is_local_serial_open() else "closed"
+        self._link_detail_var.set(f"Server: {http} | Local USB: {usb}")
+
+    def _after_local_serial_changed(self) -> None:
+        o = self._is_local_serial_open()
+        self._set_usb_lamp(o)
+        self._set_badge_color(self._connection_badge_label, "USB: Connected" if o else "USB: Disconnected", o)
+        port = self._com_port_var.get().strip() or "—"
+        self._local_usb_status_var.set(f"Local USB: {port} — {'open' if o else 'closed'}")
+        self._update_link_detail_line()
+
+    def _scan_local_ports(self) -> None:
+        if self._api_busy:
+            return
+        if serial is None or list_ports is None:
+            messagebox.showerror("Serial", f"pyserial is required: {_SERIAL_IMPORT_ERROR}")
+            return
+
+        def worker() -> None:
+            self._api_busy = True
+            try:
+                devices: list[str] = []
+                for p in list_ports.comports():
+                    d = (p.device or "").strip()
+                    if d:
+                        devices.append(d)
+                devices.sort()
+                self._root.after(0, lambda: self._present_scan_results(devices))
+            except Exception as ex:
+                self._root.after(0, lambda err=ex: messagebox.showerror("Scan ports", str(err)))
+            finally:
+                self._api_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _present_scan_results(self, devices: list[str]) -> None:
+        if not devices:
+            self._local_usb_status_var.set("Local USB: no serial ports found.")
+            messagebox.showinfo("Serial ports", "No serial ports found.")
+            return
+        if not self._com_port_var.get().strip():
+            self._com_port_var.set(devices[0])
+        head = "\n".join(devices[:50])
+        tail = f"\n… {len(devices)} total" if len(devices) > 50 else ""
+        self._local_usb_status_var.set(f"Local USB: listed {len(devices)} port(s). First: {devices[0]}")
+        messagebox.showinfo("Serial ports", head + tail)
+
+    def _connect_local_serial(self) -> None:
+        if self._api_busy:
+            return
+        if serial is None:
+            messagebox.showerror("Serial", f"pyserial is required: {_SERIAL_IMPORT_ERROR}")
+            return
+        device = self._com_port_var.get().strip()
+        if not device:
+            messagebox.showwarning("USB connect", "Enter a COM port or device path first.")
+            return
+        if sys.platform.startswith("win") and re.fullmatch(r"(?i)com\d+", device):
+            device = device.upper()
+
+        def worker() -> None:
+            self._api_busy = True
+            try:
+                with self._serial_lock:
+                    if self._local_serial is not None:
+                        try:
+                            self._local_serial.close()
+                        except Exception:
+                            pass
+                        self._local_serial = None
+                    self._local_serial = serial.Serial(device, _KIOSK_SERIAL_BAUD, timeout=2)
+                self._root.after(0, self._after_local_serial_changed)
+                self._root.after(0, lambda: _save_kiosk_settings(self._api_base_url, self._com_port_var.get()))
+            except Exception as ex:
+                self._root.after(0, lambda err=ex: messagebox.showerror("USB connect", str(err)))
+                self._root.after(0, self._after_local_serial_changed)
+            finally:
+                self._api_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _disconnect_local_serial(self) -> None:
+        def worker() -> None:
+            with self._serial_lock:
+                if self._local_serial is not None:
+                    try:
+                        self._local_serial.close()
+                    except Exception:
+                        pass
+                    self._local_serial = None
+            self._root.after(0, self._after_local_serial_changed)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _append_feedback(self, message: str, is_error: bool = False) -> None:
         _ = message
@@ -491,59 +626,13 @@ class PenKioskApp:
         self._append_feedback("Server URL applied.")
         self._refresh_status_now()
 
-    def _run_autoconnect(self) -> None:
-        if self._api_busy:
-            self._append_feedback("Another action is running.", is_error=True)
-            return
-
-        def worker() -> None:
-            self._api_busy = True
-            try:
-                com = self._com_port_var.get().strip()
-                payload: dict[str, object] = {}
-                if com:
-                    payload["comPort"] = com
-                self._api_post("/api/config/auto-connect", payload)
-                _save_kiosk_settings(self._api_base_url, self._com_port_var.get())
-                self._root.after(0, lambda: self._append_feedback("AutoConnect completed."))
-                self._root.after(0, self._refresh_status_now)
-            except Exception as ex:
-                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
-            finally:
-                self._api_busy = False
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _run_disconnect(self) -> None:
-        if self._api_busy:
-            self._append_feedback("Another action is running.", is_error=True)
-            return
-
-        def worker() -> None:
-            self._api_busy = True
-            try:
-                self._api_post("/api/config/disconnect", {})
-                self._root.after(0, lambda: self._append_feedback("Disconnected."))
-                self._root.after(0, self._refresh_status_now)
-            except Exception as ex:
-                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
-            finally:
-                self._api_busy = False
-
-        threading.Thread(target=worker, daemon=True).start()
-
     def _refresh_status_now(self) -> None:
         try:
             status = self._api_get("/api/cmd/status")
-            is_open = bool(status.get("is_open"))
+            self._http_ok = True
             is_busy = bool(status.get("is_busy") or status.get("is_printing"))
 
-            self._set_connection_visual("connected" if is_open else "disconnected")
-
-            self._set_badge_color(self._connection_badge_label, "Connected" if is_open else "Disconnected", is_open)
             self._set_badge_color(self._busy_badge_label, "Busy" if is_busy else "Idle", not is_busy)
-            com_disp = self._com_port_var.get().strip()
-            self._port_value.set(com_disp or "--")
 
             self._cumulative_distance_value.set(self._format_meters_from_mm(status.get("cumulative_distance_mm")))
             self._executed_distance_value.set(self._format_meters_from_mm(status.get("current_executed_distance_mm")))
@@ -561,17 +650,16 @@ class PenKioskApp:
             if max_pen_distance > 0 and not self._max_pen_distance_var.get().strip():
                 self._max_pen_distance_var.set(str(max_pen_distance))
         except HTTPError as ex:
-            self._set_connection_visual("unreachable")
-            self._set_badge_color(self._connection_badge_label, "Server error", ok_color=False)
+            self._http_ok = False
             self._append_feedback(f"Status HTTP error: {ex.code}", is_error=True)
         except URLError as ex:
-            self._set_connection_visual("unreachable")
-            self._set_badge_color(self._connection_badge_label, "Offline", ok_color=False)
+            self._http_ok = False
             self._append_feedback(f"Status network error: {ex.reason}", is_error=True)
         except Exception as ex:
-            self._set_connection_visual("unreachable")
-            self._set_badge_color(self._connection_badge_label, "Offline", ok_color=False)
+            self._http_ok = False
             self._append_feedback(f"Status error: {ex}", is_error=True)
+
+        self._after_local_serial_changed()
 
     def _request_headers(self, *, json_body: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {}

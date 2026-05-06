@@ -16,18 +16,12 @@
     <section class="config-grid">
       <section class="card">
         <h2>Printer Connection & Settings</h2>
-        <p class="muted small-print">Baud rate is fixed at 250000.</p>
+        <p class="muted small-print">Serial connect/disconnect is handled by the machine running this service (startup autoconnect). Enter a COM or device path below for display and client tools only (optional).</p>
         <div class="connection-scan-row">
-          <label>COM/TTY Port
-            <input id="comPort" type="text" list="serialPortsList" placeholder="/dev/printer_serial">
+          <label>COM / device path (reference)
+            <input id="comPort" type="text" list="serialPortsList" placeholder="COM3 or /dev/ttyUSB0">
             <datalist id="serialPortsList"></datalist>
           </label>
-          <button id="scanPortsBtn" type="button">Scan ports</button>
-        </div>
-        <p id="ttyPortStatus" class="muted small-print">Port status: not checked.</p>
-        <div class="secondary-row">
-          <button id="connectBtn">AutoConnect</button>
-          <button id="disconnectBtn">Disconnect</button>
         </div>
         <div class="printer-settings-section">
         <div class="settings-row-pair">

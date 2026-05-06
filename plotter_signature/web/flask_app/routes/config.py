@@ -21,30 +21,6 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         methods=["POST"],
     )
     app.add_url_rule(
-        "/api/config/serial-ports",
-        endpoint="config_serial_ports",
-        view_func=handlers["serial_ports"],
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/api/config/serial-port-check",
-        endpoint="config_serial_port_check",
-        view_func=handlers["serial_port_check"],
-        methods=["GET"],
-    )
-    app.add_url_rule(
-        "/api/config/auto-connect",
-        endpoint="config_auto_connect",
-        view_func=handlers["auto_connect"],
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/api/config/disconnect",
-        endpoint="config_disconnect",
-        view_func=handlers["disconnect"],
-        methods=["POST"],
-    )
-    app.add_url_rule(
         "/api/config/change-pen/start",
         endpoint="config_change_pen_start",
         view_func=handlers["change_pen_start"],
@@ -92,12 +68,6 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         endpoint="config_scanner_stream",
         view_func=handlers["scanner_stream_proxy"],
         methods=["GET"],
-    )
-    app.add_url_rule(
-        "/api/config/scanner/manual-config",
-        endpoint="config_scanner_manual_config",
-        view_func=handlers["scanner_manual_config"],
-        methods=["POST"],
     )
     app.add_url_rule(
         "/api/config/scanner/capture/start",

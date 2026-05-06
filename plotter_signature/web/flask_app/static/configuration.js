@@ -230,13 +230,6 @@ function hydrateConfiguration() {
   renderQuadPoints();
 }
 
-function setTtyPortStatus(message, isError = false) {
-  const node = document.getElementById("ttyPortStatus");
-  if (!node) return;
-  node.textContent = message;
-  node.className = isError ? "small-print message-error" : "small-print message-ok";
-}
-
 function persistConnectionSettings() {
   saveConnectionSettings(readConnectionForm());
 }
@@ -367,14 +360,20 @@ function queueServerUiProfileSave() {
 async function flushServerUiProfileSave() {
   if (uiState.profileSaveInFlight) {
     uiState.profileSaveQueued = true;
-    return;
+    return undefined;
   }
   uiState.profileSaveInFlight = true;
   const payload = buildServerUiProfilePayload();
   try {
-    await apiPostJson("/api/config/ui-profile", payload);
+    const data = await apiPostJson("/api/config/ui-profile", payload);
+    rememberAppliedQuadPointsFromProfile(data);
+    if (data && data.scannerApplyWarning) {
+      appendConfigLog(`Scanner apply warning: ${data.scannerApplyWarning}`, true);
+    }
+    return data;
   } catch (error) {
     appendConfigLog(`UI profile save failed: ${error.message}`, true);
+    return undefined;
   } finally {
     uiState.profileSaveInFlight = false;
     if (uiState.profileSaveQueued) {
@@ -384,111 +383,12 @@ async function flushServerUiProfileSave() {
   }
 }
 
-async function scanSerialPorts() {
-  const btn = document.getElementById("scanPortsBtn");
-  if (btn) btn.disabled = true;
-  appendConfigLog("Scanning serial ports...");
-  try {
-    const data = await apiGet("/api/config/serial-ports");
-    const input = document.getElementById("comPort");
-    const datalist = document.getElementById("serialPortsList");
-    const previousValue = (input?.value || "").trim();
-    const ports = (data.ports || [])
-      .map((p) => String(p.device || "").trim())
-      .filter(Boolean);
-    const uniquePorts = Array.from(new Set(ports));
-
-    datalist.innerHTML = "";
-
-    uniquePorts.forEach((device) => {
-      const option = document.createElement("option");
-      option.value = device;
-      datalist.appendChild(option);
-    });
-
-    if (previousValue) {
-      input.value = previousValue;
-    } else if (window.location.protocol !== "file:") {
-      input.value = DEFAULT_STABLE_TTY_PORT;
-    } else if (uniquePorts.length === 1) {
-      input.value = uniquePorts[0];
-    } else if (uniquePorts.length > 1) {
-      const usb0 = uniquePorts.find((device) => /ttyUSB0$/i.test(device));
-      input.value = usb0 || uniquePorts[0];
-    }
-
-    persistConnectionSettings();
-    const count = uniquePorts.length;
-    showConfigMessage(count ? `Found ${count} COM/USB serial port(s).` : "No COM/USB serial ports found.");
-    appendConfigLog(count ? `Scan completed: found ${count} COM/USB serial port(s).` : "Scan completed: no COM/USB serial ports found.");
-    await refreshTtyPortStatus();
-  } catch (error) {
-    showConfigMessage(`Scan failed: ${error.message}`, true);
-    appendConfigLog(`Scan failed: ${error.message}`, true);
-    setTtyPortStatus("Port status: check failed.", true);
-  } finally {
-    if (btn) btn.disabled = false;
+async function saveServerUiProfileNow() {
+  if (uiState.profileSaveTimer) {
+    clearTimeout(uiState.profileSaveTimer);
+    uiState.profileSaveTimer = null;
   }
-}
-
-async function refreshTtyPortStatus() {
-  const comPort = document.getElementById("comPort").value.trim();
-  if (!comPort) {
-    setTtyPortStatus("Port status: empty.");
-    return;
-  }
-  try {
-    const data = await apiGet(`/api/config/serial-port-check?device=${encodeURIComponent(comPort)}`);
-    const isReady = Boolean(data.exists) && Boolean(data.readable) && Boolean(data.writable);
-    const flags = [
-      data.exists ? "exists" : "missing",
-      data.readable ? "readable" : "not-readable",
-      data.writable ? "writable" : "not-writable",
-    ].join(", ");
-    const resolved = data.resolvedTarget && data.resolvedTarget !== comPort
-      ? ` -> ${data.resolvedTarget}`
-      : "";
-    setTtyPortStatus(
-      `Port status: ${isReady ? "ready" : "unavailable"} (${flags})${resolved}`,
-      !isReady
-    );
-  } catch (error) {
-    setTtyPortStatus(`Port status: check error (${error.message}).`, true);
-  }
-}
-
-async function connectPrinter() {
-  const comPort = document.getElementById("comPort").value.trim();
-  const payload = { baudRate: FIXED_BAUD_RATE };
-  if (comPort) {
-    payload.comPort = comPort;
-  }
-  appendConfigLog(`Connecting printer${comPort ? ` on ${comPort}` : ""}...`);
-  try {
-    await apiPostJson("/api/config/auto-connect", payload);
-    persistConnectionSettings();
-    showConfigMessage("Printer connected.");
-    appendConfigLog("Printer connected.");
-    await refreshTtyPortStatus();
-  } catch (error) {
-    showConfigMessage(`Connect error: ${error.message}`, true);
-    appendConfigLog(`Connect failed: ${error.message}`, true);
-    await refreshTtyPortStatus();
-  }
-}
-
-async function disconnectPrinter() {
-  appendConfigLog("Disconnecting printer...");
-  try {
-    await apiPostJson("/api/config/disconnect");
-    showConfigMessage("Printer disconnected.");
-    appendConfigLog("Printer disconnected.");
-    await refreshTtyPortStatus();
-  } catch (error) {
-    showConfigMessage(`Disconnect error: ${error.message}`, true);
-    appendConfigLog(`Disconnect failed: ${error.message}`, true);
-    await refreshTtyPortStatus();
-  }
+  return flushServerUiProfileSave();
 }
 
 async function runChangePen() {
@@ -589,41 +489,15 @@ function buildQuadPointsPxFromCapture(capture, options = {}) {
   return null;
 }
 
-function rememberAppliedQuadPoints(responseData, fallbackQuadPointsPx) {
-  const frameWidth = Number(responseData?.manual_config?.frame_width || 0);
-  const frameHeight = Number(responseData?.manual_config?.frame_height || 0);
-  if (frameWidth && frameHeight) {
-    uiState.streamNaturalWidth = frameWidth;
-    uiState.streamNaturalHeight = frameHeight;
-  }
-
-  const responseQuadPoints = responseData?.manual_config?.quad_points;
-  if (Array.isArray(responseQuadPoints) && responseQuadPoints.length === REQUIRED_QUAD_POINTS) {
-    uiState.lastAppliedQuadPointsPx = cloneQuadPoints(responseQuadPoints);
+function rememberAppliedQuadPointsFromProfile(profile) {
+  if (!profile || typeof profile !== "object") {
     return;
   }
-  if (Array.isArray(fallbackQuadPointsPx) && fallbackQuadPointsPx.length === REQUIRED_QUAD_POINTS) {
-    uiState.lastAppliedQuadPointsPx = cloneQuadPoints(fallbackQuadPointsPx);
+  const capture = profile.capture || {};
+  const responseQuadPoints = capture.quad_points;
+  if (Array.isArray(responseQuadPoints) && responseQuadPoints.length === REQUIRED_QUAD_POINTS) {
+    uiState.lastAppliedQuadPointsPx = cloneQuadPoints(responseQuadPoints);
   }
-}
-
-async function applyScannerManualConfig(options = {}) {
-  const capture = readCaptureSettingsForm();
-  const quadPointsPx = buildQuadPointsPxFromCapture(capture, {
-    requireQuadPoints: Boolean(options.requireQuadPoints),
-  });
-
-  const payload = {
-    autofocus_enabled: Boolean(capture.autofocusEnabled),
-    manual_focus_value: Number(capture.manualFocusValue || 35),
-  };
-  if (Array.isArray(quadPointsPx) && quadPointsPx.length === REQUIRED_QUAD_POINTS) {
-    payload.quad_points = quadPointsPx;
-  }
-
-  const responseData = await apiPostJson("/api/config/scanner/manual-config", payload);
-  rememberAppliedQuadPoints(responseData, quadPointsPx);
-  return { responseData, payload };
 }
 
 function queueManualFocusSync() {
@@ -644,7 +518,7 @@ async function flushManualFocusSync() {
   const autofocusMode = isAutofocusEnabled() ? "enabled" : "disabled";
   appendConfigLog(`Syncing focus config (autofocus ${autofocusMode}, manual ${focusValue})...`);
   try {
-    await applyScannerManualConfig({ requireQuadPoints: false });
+    await saveServerUiProfileNow();
     showConfigMessage(`Focus config sent (autofocus ${autofocusMode}, manual ${focusValue}).`);
     appendConfigLog(`Focus config synced (autofocus ${autofocusMode}, manual ${focusValue}).`);
   } catch (error) {
@@ -681,14 +555,8 @@ function registerPersistenceListeners() {
 
   connectionFields.forEach((id) => {
     const node = document.getElementById(id);
-    node.addEventListener("input", () => {
-      persistConnectionSettings();
-      void refreshTtyPortStatus();
-    });
-    node.addEventListener("change", () => {
-      persistConnectionSettings();
-      void refreshTtyPortStatus();
-    });
+    node.addEventListener("input", persistConnectionSettings);
+    node.addEventListener("change", persistConnectionSettings);
   });
 
   printFields.forEach((id) => {
@@ -787,10 +655,17 @@ function addQuadPointFromClick(event) {
 async function sendScannerConfig() {
   appendConfigLog("Sending scanner config...");
   try {
-    const { payload } = await applyScannerManualConfig({ requireQuadPoints: true });
-    await flushServerUiProfileSave();
-    showConfigMessage(`Scanner config sent successfully.\nPayload:\n${JSON.stringify(payload, null, 2)}`);
-    appendConfigLog("Scanner config sent successfully.");
+    const capture = readCaptureSettingsForm();
+    buildQuadPointsPxFromCapture(capture, { requireQuadPoints: true });
+    const data = await saveServerUiProfileNow();
+    const warn = data && data.scannerApplyWarning;
+    showConfigMessage(
+      warn
+        ? `Scanner config saved with warning: ${warn}`
+        : "Scanner config sent successfully (via UI profile).",
+      Boolean(warn),
+    );
+    appendConfigLog(warn ? `Scanner apply warning: ${warn}` : "Scanner config sent successfully.");
   } catch (error) {
     showConfigMessage(`Send scanner config failed: ${error.message}`, true);
     appendConfigLog(`Scanner config failed: ${error.message}`, true);
@@ -798,9 +673,6 @@ async function sendScannerConfig() {
 }
 
 function registerActions() {
-  document.getElementById("scanPortsBtn").addEventListener("click", scanSerialPorts);
-  document.getElementById("connectBtn").addEventListener("click", connectPrinter);
-  document.getElementById("disconnectBtn").addEventListener("click", disconnectPrinter);
   document.getElementById("setApiKeyBtn").addEventListener("click", setApiKey);
   document.getElementById("getApiKeyBtn").addEventListener("click", getApiKey);
   document.getElementById("setPenMaxBtn").addEventListener("click", setPenMaxDistance);
@@ -833,7 +705,7 @@ function registerActions() {
       const mode = isAutofocusEnabled() ? "enabled" : "disabled";
       showConfigMessage(`Autofocus ${mode} selected. Sending to scanner...`);
       appendConfigLog(`Autofocus ${mode} selected. Sending update...`);
-      void applyScannerManualConfig({ requireQuadPoints: false })
+      void saveServerUiProfileNow()
         .then(() => {
           showConfigMessage(`Autofocus ${mode} sent.`);
           appendConfigLog(`Autofocus ${mode} sent.`);
@@ -862,8 +734,6 @@ async function initConfigurationPage() {
   registerActions();
   showConfigMessage("Settings are saved automatically in this browser.");
   appendConfigLog("Configuration page initialized.");
-  void scanSerialPorts();
-  void refreshTtyPortStatus();
 }
 
 void initConfigurationPage();

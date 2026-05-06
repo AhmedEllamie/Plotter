@@ -30,7 +30,6 @@ from plotter_signature.infrastructure.security.api_key_auth import (
     is_api_key_required,
     validate_api_key,
 )
-from plotter_signature.services.printer.printer_service import AutoConnectFailedError
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 from plotter_signature.web.flask_app.config import ScannerServiceSettings, load_capture_settings, load_scanner_service_settings
 from plotter_signature.web.flask_app.response import api_error, api_success
@@ -59,7 +58,10 @@ def _parse_optional_int(value: Any) -> int | None:
 
 def _ensure_connected(provider: ServiceProvider) -> None:
     if not provider.printer_service.is_open:
-        raise RuntimeError("Printer is not connected. Call POST /api/config/auto-connect first.")
+        raise RuntimeError(
+            "Printer is not connected. Ensure the server process has opened the serial port "
+            "(startup autoconnect / deployment configuration)."
+        )
 
 
 def _ensure_not_busy(provider: ServiceProvider) -> None:
@@ -70,20 +72,21 @@ def _ensure_not_busy(provider: ServiceProvider) -> None:
 def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
     payload = asdict(provider.printer_service.get_status())
     payload.pop("port_name", None)
+    payload.pop("is_open", None)
     return payload
 
 
-def _manual_config_response_body(raw: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        return {}
-    out: dict[str, Any] = {"ok": bool(raw.get("ok", True))}
-    mc = raw.get("manual_config")
-    if isinstance(mc, dict):
-        out["manual_config"] = dict(mc)
-    qp = raw.get("quad_points")
-    if qp is not None:
-        out["quad_points"] = qp
-    return out
+def _capture_profile_to_scanner_session_payload(capture: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Build scanner session body from a sanitized capture dict. Second value: require quad points list."""
+    payload: dict[str, Any] = {
+        "autofocus_enabled": bool(capture.get("autofocus_enabled", False)),
+        "manual_focus_value": float(capture.get("manual_focus_value", 35)),
+    }
+    quad_points = capture.get("quad_points")
+    if isinstance(quad_points, list) and len(quad_points) == 4:
+        payload["quad_points"] = quad_points
+        return payload, True
+    return payload, False
 
 
 def _build_print_request(payload: dict[str, Any] | None) -> PrintRequest:
@@ -605,7 +608,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return merged
 
     def _remember_scanner_manual_config(payload: dict[str, Any], scanner_response: dict[str, Any]) -> None:
-        source = scanner_response.get("manual_config")
+        qp_block = scanner_response.get("quad_points")
+        if isinstance(qp_block, dict) and isinstance(qp_block.get("manual_config"), dict):
+            source = qp_block["manual_config"]
+        else:
+            source = scanner_response.get("manual_config")
         if not isinstance(source, dict):
             source = payload
         for key in ("autofocus_enabled", "manual_focus_value", "quad_points", "frame_width", "frame_height"):
@@ -865,6 +872,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 error_code="UI_PROFILE_SAVE_FAILED",
                 status_code=500,
             )
+        scanner_warning: str | None = None
         with ui_profile_lock:
             ui_profile_data.clear()
             ui_profile_data.update(saved_profile)
@@ -879,7 +887,25 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                         last_scanner_manual_config["manual_focus_value"] = float(saved_capture.get("manual_focus_value"))
                     except (TypeError, ValueError):
                         pass
-            return api_success(message="UI profile saved.", data=dict(ui_profile_data))
+
+            if scanner_settings.is_configured and isinstance(saved_capture, dict):
+                session_payload, require_quad = _capture_profile_to_scanner_session_payload(saved_capture)
+                try:
+                    scanner_response = _apply_scanner_session_config(session_payload, require_quad_points=require_quad)
+                    if scanner_response.get("ok") is False:
+                        raise RuntimeError(scanner_response.get("message") or "Scanner session apply failed.")
+                    _remember_scanner_manual_config(session_payload, scanner_response)
+                except Exception as ex:
+                    scanner_warning = str(ex)
+                    app.logger.warning("Scanner apply after UI profile save failed: %s", ex)
+
+        data_out = dict(ui_profile_data)
+        if scanner_warning:
+            data_out["scannerApplyWarning"] = scanner_warning
+        message = "UI profile saved."
+        if scanner_warning:
+            message = f"{message} Scanner apply failed: {scanner_warning}"
+        return api_success(message=message, data=data_out)
 
     @app.get("/api/config/scanner/stream.mjpg")
     def scanner_stream_proxy() -> Response | tuple[Response, int]:
@@ -914,37 +940,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             upstream,
             content_type=upstream.headers.get("Content-Type", "multipart/x-mixed-replace; boundary=frame"),
             direct_passthrough=True,
-        )
-
-    @app.post("/api/config/scanner/manual-config")
-    def scanner_manual_config() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        if not payload:
-            return api_error("Manual config payload is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            manual_config_response = _apply_scanner_session_config(payload, require_quad_points=False)
-            if manual_config_response.get("ok") is False:
-                raise RuntimeError(manual_config_response.get("message") or "Scanner manual config failed.")
-            _remember_scanner_manual_config(payload, manual_config_response)
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner manual config failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Manual config failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
-        return api_success(
-            "Scanner manual config applied.",
-            data=_manual_config_response_body(manual_config_response),
         )
 
     @app.post("/api/config/scanner/capture/start")
@@ -1103,140 +1098,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except KeyError:
             return api_error("Capture job not found.", error_code="CAPTURE_JOB_NOT_FOUND", status_code=404)
         return api_success("Capture orchestration status loaded.", data=snapshot)
-
-    @app.get("/api/config/serial-ports")
-    def serial_ports() -> tuple[Response, int]:
-        try:
-            from serial.tools import list_ports
-        except ImportError:
-            return api_error(
-                "Serial port listing requires pyserial.",
-                error_code="SERIAL_LIST_UNAVAILABLE",
-                status_code=503,
-            )
-
-        try:
-            entries = []
-            is_windows = sys.platform.startswith("win")
-            is_linux = sys.platform.startswith("linux")
-            for p in list_ports.comports():
-                device = (p.device or "").strip()
-                if not device:
-                    continue
-
-                # Keep UI selection strict:
-                # - Windows: COM ports only
-                # - Linux: USB serial adapters only (/dev/ttyUSB* or /dev/ttyACM*)
-                if is_windows and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
-                    continue
-                if is_linux:
-                    linux_match = re.fullmatch(r"(?:/dev/)?tty(?:USB|ACM)\d+", device, flags=re.IGNORECASE)
-                    if not linux_match:
-                        continue
-                    # Normalize to absolute /dev path for consistent UI and connect payloads.
-                    if not device.startswith("/dev/"):
-                        device = f"/dev/{device}"
-
-                if is_windows:
-                    # Normalize Windows device name casing.
-                    device = device.upper()
-
-                entries.append(
-                    {
-                        "device": device,
-                        "description": (p.description or "").strip(),
-                        "manufacturer": (p.manufacturer or "").strip(),
-                    }
-                )
-
-            entries.sort(key=lambda x: x["device"])
-        except Exception as ex:
-            return api_error(
-                f"Failed to list serial ports: {ex}",
-                error_code="SERIAL_LIST_FAILED",
-                status_code=500,
-            )
-
-        return api_success(message="Serial ports listed.", data={"ports": entries})
-
-    @app.get("/api/config/serial-port-check")
-    def serial_port_check() -> tuple[Response, int]:
-        device = str(request.args.get("device", "")).strip()
-        if not device:
-            return api_error("device is required.", error_code="SERIAL_DEVICE_REQUIRED", status_code=400)
-        if not device.startswith("/dev/") and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
-            return api_error("Invalid serial device path.", error_code="SERIAL_DEVICE_INVALID", status_code=400)
-
-        exists = os.path.exists(device)
-        readable = os.access(device, os.R_OK) if exists else False
-        writable = os.access(device, os.W_OK) if exists else False
-        resolved_target = ""
-        if exists:
-            try:
-                resolved_target = os.path.realpath(device)
-            except Exception:
-                resolved_target = ""
-
-        return api_success(
-            message="Serial device check complete.",
-            data={
-                "device": device,
-                "exists": bool(exists),
-                "readable": bool(readable),
-                "writable": bool(writable),
-                "resolvedTarget": resolved_target,
-            },
-        )
-
-    @app.post("/api/config/auto-connect")
-    def auto_connect() -> tuple[Response, int]:
-        if provider.printer_service.is_open:
-            return api_error(
-                message=f"Already connected to {provider.printer_service.port_name}. Disconnect first.",
-                error_code="ALREADY_CONNECTED",
-                status_code=409,
-            )
-
-        payload = _get_json_dict()
-        com_port = payload.get("comPort") or payload.get("com_port") or request.args.get("comPort") or request.args.get("com_port")
-        com_port = str(com_port).strip() if com_port else None
-        raw_baud = payload.get("baudRate") or payload.get("baud_rate") or request.args.get("baudRate")
-        try:
-            baud_rate = _parse_optional_int(raw_baud)
-        except ValueError as ex:
-            return api_error(str(ex), error_code="INVALID_BAUD_RATE", status_code=400)
-        try:
-            provider.printer_service.autoconnect(explicit_com_port=com_port, baud_rate=baud_rate)
-        except AutoConnectFailedError as ex:
-            return api_error(
-                str(ex),
-                error_code="AUTO_CONNECT_FAILED",
-                status_code=400,
-                details={"attemptedPorts": ex.attempted_ports},
-            )
-        except ValueError as ex:
-            return api_error(str(ex), error_code="INVALID_BAUD_RATE", status_code=400)
-        except Exception as ex:
-            return api_error(f"Failed to auto-connect: {ex}", error_code="CONNECT_FAILED", status_code=400)
-
-        return api_success(
-            message=f"Connected to {provider.printer_service.port_name}.",
-            data=asdict(provider.printer_service.get_status()),
-        )
-
-    @app.post("/api/config/disconnect")
-    def disconnect() -> tuple[Response, int]:
-        if not provider.printer_service.is_open:
-            return api_error("Printer is not connected.", error_code="NOT_CONNECTED", status_code=409)
-        if provider.printer_service.is_busy:
-            return api_error(
-                "Cannot disconnect while printer is busy.",
-                error_code="PRINTER_BUSY",
-                status_code=409,
-            )
-
-        provider.printer_service.close_port()
-        return api_success("Disconnected from printer.", data=_printer_status_public_dict(provider))
 
     @app.get("/api/cmd/status")
     def status() -> tuple[Response, int]:
