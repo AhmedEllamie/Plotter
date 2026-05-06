@@ -45,8 +45,17 @@ At minimum set:
 
 - `PLOTTER_API_KEY` to a long random shared secret **when you want API authentication**. When unset or blank, **`/api/*` does not require** `X-API-Key` (fine for isolated networks). Changing the key after deployment: edit the env file, `sudo systemctl restart plotter-signature-flask`, then update browsers/kiosk/integration clients.
 - `CAPTURE_RESET_URL` to your reset endpoint.
+- Optional `PLOTTER_SERIAL_DEVICE_MATCH` to a stable USB serial identifier for the plotter, such as `CH340`, `CP210x`, or `VID:PID=1A86:7523`.
 
-Unless you are on a machine **without** USB serial hardware (or CI), rely on the default: **AutoConnect runs once** when Flask/FastAPI start (same as `POST /api/config/auto-connect` with `{}`; failures are logged and the service still listens). To **disable** that probing, set **`AUTO_CONNECT_ON_STARTUP`** to `0`, `false`, `no`, or `off`.
+Serial scan/check/connect/disconnect config APIs are removed. Use the Desktop App local USB panel or CLI direct serial flow instead. The CLI scans Ubuntu `/dev/ttyUSB*` and `/dev/ttyACM*` devices, matches `PLOTTER_SERIAL_DEVICE_MATCH` / `--device-match` against USB metadata (`device`, `name`, `description`, `manufacturer`, `hwid`), and opens the matching plotter directly.
+
+```bash
+python -m plotter_signature.cli scan-serial --device-match "CH340"
+python -m plotter_signature.cli connect --device-match "CH340"
+python -m plotter_signature.cli disconnect
+```
+
+The Desktop App uses the same direct serial resolver for its local USB connect/disconnect controls.
 
 If scanner integration is used, also set:
 
@@ -86,7 +95,7 @@ sudo systemctl status plotter-signature-flask
 Local health check:
 
 ```bash
-curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health
+curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/cmd/health
 ```
 
 UI:

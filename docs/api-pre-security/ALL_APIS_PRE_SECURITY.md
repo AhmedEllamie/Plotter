@@ -2,7 +2,7 @@
 
 This document consolidates all /api/* endpoint docs before API key enforcement.
 
-**Note:** Short paths here map to live Flask routes under **`/api/cmd/*`** and **`/api/config/*`** (see per-file `README.md`). **`GET /api/cmd/status`** payload omits **`port_name`**. Routes **upload**, **focus-adjust**, **capture/request**, and **requests** listings were removed; use multipart print, scanner direct APIs, **`CAPTURE_RESET_URL`**, and **`POST /api/config/auto-connect`** instead.
+**Note:** Short paths here map to live Flask routes under **`/api/cmd/*`** and **`/api/config/*`** (see per-file `README.md`). Public status omits serial port fields. Routes **upload**, **focus-adjust**, **scanner manual-config**, **serial scan/check/connect/disconnect**, **capture/request**, and **requests** listings were removed; use multipart print, scanner direct APIs, **Desktop App / CLI direct serial**, and **`CAPTURE_RESET_URL`** instead.
 
 ---
 
@@ -74,7 +74,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: defaultComPort, defaultBaudRate, captureResetConfigured, captureResetMethod, scannerServiceConfigured, scannerServiceBaseUrl
+- Success data: captureResetConfigured, captureResetMethod, scannerServiceConfigured, scannerServiceBaseUrl
 
 ## Error Response
 - Error envelope:
@@ -263,7 +263,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer status JSON **without `port_name`** (use AutoConnect/connect for port context)
+- Success data: printer status JSON without serial port fields
 
 ## Error Response
 - Error envelope:
@@ -386,6 +386,8 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
 
 # POST /api/config/auto-connect
 
+> Removed. Use Desktop App / CLI direct serial connect instead.
+
 ## Behavior
 - When `PLOTTER_API_KEY` is unset or empty, `X-API-Key` is not required.
 
@@ -399,7 +401,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer status after connection (`port_name` present here; omit from **`GET …/status`** JSON)
+- This HTTP route is no longer available.
 
 ## Error Response
 - Error envelope:

@@ -5,19 +5,26 @@ import asyncio
 import base64
 import io
 import json
+import os
+import re
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from plotter_signature.dependency_injection import get_service_provider
+from plotter_signature.dependency_injection import ServiceProvider
 from plotter_signature.domain.contracts import (
     PrintApprovalRequest,
     PrintRequest,
     PrintWithApprovalRequest,
     get_paper_size_mm,
 )
+from plotter_signature.services.printer.printer_service import AutoConnectFailedError
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
+
+_SERIAL_MATCH_ENV_KEYS = ("PLOTTER_SERIAL_DEVICE_MATCH", "PLOTTER_DEVICE_MATCH")
 
 
 def _json_arg_to_dict(value: str) -> dict[str, Any]:
@@ -53,17 +60,160 @@ def _convert_svg_for_cli(svg_path: str, request: PrintRequest) -> list[str]:
     return gcode
 
 
-def _ensure_connected(com_port: str | None, baud_rate: int | None, auto_connect: bool) -> bool:
+class CliSerialConnectError(RuntimeError):
+    def __init__(self, message: str, *, payload: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.payload = payload
+
+
+def _normalize_serial_device(device: str) -> str:
+    candidate = device.strip()
+    if sys.platform.startswith("win") and re.fullmatch(r"COM\d+", candidate, flags=re.IGNORECASE):
+        return candidate.upper()
+    if sys.platform.startswith("linux") and re.fullmatch(r"tty(?:USB|ACM)\d+", candidate, flags=re.IGNORECASE):
+        return f"/dev/{candidate}"
+    return candidate
+
+
+def _candidate_match_text(candidate: dict[str, str]) -> str:
+    return " ".join(
+        value
+        for key in ("device", "name", "description", "manufacturer", "hwid")
+        if (value := candidate.get(key, "").strip())
+    ).lower()
+
+
+def scan_serial_devices() -> list[dict[str, str]]:
+    try:
+        from serial.tools import list_ports
+    except ImportError as ex:
+        raise RuntimeError("pyserial is required to scan serial ports.") from ex
+
+    devices: list[dict[str, str]] = []
+    is_windows = sys.platform.startswith("win")
+    is_linux = sys.platform.startswith("linux")
+    for port in list_ports.comports():
+        device = _normalize_serial_device(str(port.device or ""))
+        if not device:
+            continue
+        if is_windows and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
+            continue
+        if is_linux and not re.fullmatch(r"/dev/tty(?:USB|ACM)\d+", device, flags=re.IGNORECASE):
+            continue
+        devices.append(
+            {
+                "device": device,
+                "name": str(getattr(port, "name", "") or "").strip(),
+                "description": str(getattr(port, "description", "") or "").strip(),
+                "manufacturer": str(getattr(port, "manufacturer", "") or "").strip(),
+                "hwid": str(getattr(port, "hwid", "") or "").strip(),
+            }
+        )
+    devices.sort(key=lambda item: item["device"])
+    return devices
+
+
+def _resolve_device_match(explicit_match: str | None) -> str:
+    if explicit_match and explicit_match.strip():
+        return explicit_match.strip()
+    for env_key in _SERIAL_MATCH_ENV_KEYS:
+        value = (os.getenv(env_key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _select_serial_device(device_match: str, candidates: list[dict[str, str]]) -> dict[str, str] | None:
+    needle = device_match.strip().lower()
+    if not needle:
+        return None
+    for candidate in candidates:
+        if needle in _candidate_match_text(candidate):
+            return candidate
+    return None
+
+
+def connect_printer_serial(
+    provider: ServiceProvider,
+    *,
+    com_port: str | None = None,
+    baud_rate: int | None = None,
+    device_match: str | None = None,
+) -> dict[str, Any]:
+    explicit_port = _normalize_serial_device(com_port or "") if com_port else ""
+    match = _resolve_device_match(device_match)
+    candidates = scan_serial_devices()
+    selected = _select_serial_device(match, candidates)
+
+    if match and selected is None and not explicit_port:
+        raise CliSerialConnectError(
+            f"No serial port matched device info '{match}'.",
+            payload={
+                "error": f"No serial port matched device info '{match}'.",
+                "deviceMatch": match,
+                "attemptedPorts": [candidate["device"] for candidate in candidates],
+                "serialDevices": candidates,
+            },
+        )
+
+    if explicit_port or selected is not None:
+        target = explicit_port or selected["device"]
+        try:
+            provider.printer_service.open_port(com_port=target, baud_rate=baud_rate)
+        except Exception as ex:
+            raise CliSerialConnectError(
+                f"Failed to open serial port {target}: {ex}",
+                payload={
+                    "error": f"Failed to open serial port {target}: {ex}",
+                    "attemptedPorts": [target],
+                    "deviceMatch": match or None,
+                    "matchedDevice": selected,
+                    "serialDevices": candidates,
+                },
+            ) from ex
+        return {
+            "connectedPort": provider.printer_service.port_name,
+            "attemptedPorts": [target],
+            "deviceMatch": match or None,
+            "matchedDevice": selected,
+            "serialDevices": candidates,
+        }
+
+    try:
+        provider.printer_service.autoconnect(explicit_com_port=None, baud_rate=baud_rate)
+    except AutoConnectFailedError as ex:
+        raise CliSerialConnectError(
+            str(ex),
+            payload={
+                "error": str(ex),
+                "attemptedPorts": ex.attempted_ports,
+                "deviceMatch": None,
+                "matchedDevice": None,
+                "serialDevices": candidates,
+            },
+        ) from ex
+    return {
+        "connectedPort": provider.printer_service.port_name,
+        "attemptedPorts": [],
+        "deviceMatch": None,
+        "matchedDevice": None,
+        "serialDevices": candidates,
+    }
+
+
+def _ensure_connected(
+    com_port: str | None,
+    baud_rate: int | None,
+    auto_connect: bool,
+    device_match: str | None = None,
+) -> bool:
     provider = get_service_provider()
     if provider.printer_service.is_open:
         return False
     if not auto_connect:
         raise RuntimeError("Printer is not connected. Use connect command or enable --auto-connect.")
 
-    provider.printer_service.open_port(
-        com_port=com_port or provider.printer_service.default_com_port,
-        baud_rate=baud_rate or provider.printer_service.default_baud_rate,
-    )
+    connect_printer_serial(provider, com_port=com_port, baud_rate=baud_rate, device_match=device_match)
     return True
 
 
@@ -73,11 +223,17 @@ def cmd_connect(args: argparse.Namespace) -> int:
         _print_json({"message": f"Already connected to {provider.printer_service.port_name}."})
         return 0
 
-    provider.printer_service.open_port(args.com_port, args.baud_rate)
+    connect_result = connect_printer_serial(
+        provider,
+        com_port=args.com_port,
+        baud_rate=args.baud_rate,
+        device_match=args.device_match,
+    )
     _print_json(
         {
             "message": f"Connected to {provider.printer_service.port_name}.",
             "status": asdict(provider.printer_service.get_status()),
+            "serial": connect_result,
         }
     )
     return 0
@@ -99,6 +255,20 @@ def cmd_status(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan_serial(args: argparse.Namespace) -> int:
+    candidates = scan_serial_devices()
+    match = _resolve_device_match(args.device_match)
+    selected = _select_serial_device(match, candidates)
+    _print_json(
+        {
+            "deviceMatch": match or None,
+            "selected": selected,
+            "serialDevices": candidates,
+        }
+    )
+    return 0
+
+
 def cmd_generate(args: argparse.Namespace) -> int:
     provider = get_service_provider()
     request = _build_print_request(args.print_request_json)
@@ -117,7 +287,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 async def _cmd_print_async(args: argparse.Namespace) -> int:
     provider = get_service_provider()
-    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect)
+    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect, args.device_match)
     try:
         request = _build_print_request(args.print_request_json)
         gcode = _convert_svg_for_cli(args.svg, request)
@@ -138,7 +308,7 @@ async def _cmd_bulk_print_async(args: argparse.Namespace) -> int:
         raise ValueError("Copies must be between 1 and 100.")
 
     provider = get_service_provider()
-    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect)
+    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect, args.device_match)
     try:
         request = _build_print_request(args.print_request_json)
         gcode = _convert_svg_for_cli(args.svg, request)
@@ -156,7 +326,7 @@ def cmd_bulk_print(args: argparse.Namespace) -> int:
 
 async def _cmd_pen_change_start_async(args: argparse.Namespace) -> int:
     provider = get_service_provider()
-    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect)
+    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect, args.device_match)
     try:
         result = await provider.printer_service.pen_change_start()
         _print_json(asdict(result))
@@ -172,7 +342,7 @@ def cmd_pen_change_start(args: argparse.Namespace) -> int:
 
 async def _cmd_pen_change_finish_async(args: argparse.Namespace) -> int:
     provider = get_service_provider()
-    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect)
+    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect, args.device_match)
     try:
         result = await provider.printer_service.pen_change_finish()
         _print_json(asdict(result))
@@ -188,7 +358,7 @@ def cmd_pen_change_finish(args: argparse.Namespace) -> int:
 
 async def _cmd_print_with_approval_async(args: argparse.Namespace) -> int:
     provider = get_service_provider()
-    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect)
+    auto_opened = _ensure_connected(args.com_port, args.baud_rate, args.auto_connect, args.device_match)
     try:
         request_payload = _json_arg_to_dict(args.request_json)
         request_model = PrintWithApprovalRequest.from_dict(request_payload)
@@ -300,6 +470,12 @@ def build_parser() -> argparse.ArgumentParser:
     connect = sub.add_parser("connect", help="Open printer serial connection.")
     connect.add_argument("--com-port", dest="com_port", default=None)
     connect.add_argument("--baud-rate", dest="baud_rate", type=int, default=None)
+    connect.add_argument(
+        "--device-match",
+        dest="device_match",
+        default=None,
+        help="Match serial device metadata (description/manufacturer/hwid), e.g. CH340 or VID:PID=1A86:7523.",
+    )
     connect.set_defaults(func=cmd_connect)
 
     disconnect = sub.add_parser("disconnect", help="Close printer serial connection.")
@@ -307,6 +483,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Show printer status.")
     status.set_defaults(func=cmd_status)
+
+    scan_serial = sub.add_parser("scan-serial", help="List USB serial devices and selected metadata match.")
+    scan_serial.add_argument(
+        "--device-match",
+        dest="device_match",
+        default=None,
+        help="Optional metadata text to match against description/manufacturer/hwid.",
+    )
+    scan_serial.set_defaults(func=cmd_scan_serial)
 
     generate = sub.add_parser("generate", help="Convert SVG to G-code.")
     generate.add_argument("--svg", required=True, help="Path to SVG file.")
@@ -322,6 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
     print_cmd.add_argument("--print-request-json", required=True)
     print_cmd.add_argument("--com-port", dest="com_port", default=None)
     print_cmd.add_argument("--baud-rate", dest="baud_rate", type=int, default=None)
+    print_cmd.add_argument("--device-match", dest="device_match", default=None)
     print_cmd.add_argument("--auto-connect", action=argparse.BooleanOptionalAction, default=True)
     print_cmd.set_defaults(func=cmd_print)
 
@@ -331,18 +517,21 @@ def build_parser() -> argparse.ArgumentParser:
     bulk.add_argument("--copies", required=True, type=int)
     bulk.add_argument("--com-port", dest="com_port", default=None)
     bulk.add_argument("--baud-rate", dest="baud_rate", type=int, default=None)
+    bulk.add_argument("--device-match", dest="device_match", default=None)
     bulk.add_argument("--auto-connect", action=argparse.BooleanOptionalAction, default=True)
     bulk.set_defaults(func=cmd_bulk_print)
 
     pen_change_start = sub.add_parser("pen-change-start", help="Move pen to change position.")
     pen_change_start.add_argument("--com-port", dest="com_port", default=None)
     pen_change_start.add_argument("--baud-rate", dest="baud_rate", type=int, default=None)
+    pen_change_start.add_argument("--device-match", dest="device_match", default=None)
     pen_change_start.add_argument("--auto-connect", action=argparse.BooleanOptionalAction, default=True)
     pen_change_start.set_defaults(func=cmd_pen_change_start)
 
     pen_change_finish = sub.add_parser("pen-change-finish", help="Move pen back to ready/up position.")
     pen_change_finish.add_argument("--com-port", dest="com_port", default=None)
     pen_change_finish.add_argument("--baud-rate", dest="baud_rate", type=int, default=None)
+    pen_change_finish.add_argument("--device-match", dest="device_match", default=None)
     pen_change_finish.add_argument("--auto-connect", action=argparse.BooleanOptionalAction, default=True)
     pen_change_finish.set_defaults(func=cmd_pen_change_finish)
 
@@ -353,6 +542,7 @@ def build_parser() -> argparse.ArgumentParser:
     approval.add_argument("--paper-image-base64", default=None)
     approval.add_argument("--com-port", dest="com_port", default=None)
     approval.add_argument("--baud-rate", dest="baud_rate", type=int, default=None)
+    approval.add_argument("--device-match", dest="device_match", default=None)
     approval.add_argument("--auto-connect", action=argparse.BooleanOptionalAction, default=True)
     approval.set_defaults(func=cmd_print_with_approval)
 
@@ -390,6 +580,9 @@ def main() -> int:
     args = parser.parse_args()
     try:
         return args.func(args)
+    except CliSerialConnectError as ex:
+        _print_json(ex.payload)
+        return 1
     except Exception as ex:
         _print_json({"error": str(ex)})
         return 1

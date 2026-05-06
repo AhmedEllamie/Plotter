@@ -6,16 +6,11 @@ These files describe historical **short** paths (e.g. `/api/health`). The live F
 - [GET /api/health](GET_api_health.md) → `GET /api/cmd/health`
 - [GET /api/config](GET_api_config.md) → `GET /api/config`
 - [GET /api/scanner/stream.mjpg](GET_api_scanner_stream_mjpg.md) → `GET /api/config/scanner/stream.mjpg`
-- [POST /api/scanner/manual-config](POST_api_scanner_manual_config.md) → `POST /api/config/scanner/manual-config`
 - [POST /api/scanner/capture/start](POST_api_scanner_capture_start.md) → `POST /api/config/scanner/capture/start`
 - [POST /api/scanner/capture/run](POST_api_scanner_capture_run.md) → `POST /api/config/scanner/capture/run`
 - [GET /api/scanner/capture/&lt;capture_id&gt;/status](GET_api_scanner_capture_status.md) → `GET /api/config/scanner/capture/{capture_id}/status`
 - [GET /api/scanner/capture/&lt;capture_id&gt;/result](GET_api_scanner_capture_result.md) → `GET /api/config/scanner/capture/{capture_id}/result`
 - [GET /api/scanner/capture/run/&lt;job_id&gt;](GET_api_scanner_capture_run_job_id.md) → `GET /api/config/scanner/capture/run/{job_id}`
-- [GET /api/serial-ports](GET_api_serial_ports.md) → `GET /api/config/serial-ports`
-- [GET /api/serial-port-check](GET_api_serial_port_check.md) → `GET /api/config/serial-port-check`
-- [POST /api/config/auto-connect](POST_api_auto_connect.md)
-- [POST /api/disconnect](POST_api_disconnect.md) → `POST /api/config/disconnect`
 - [GET /api/status](GET_api_status.md) → `GET /api/cmd/status`
 - [POST /api/print](POST_api_print.md) → `POST /api/cmd/print`
 - [POST /api/print/bulk](POST_api_print_bulk.md) → `POST /api/cmd/print/bulk`
@@ -35,5 +30,8 @@ These files describe historical **short** paths (e.g. `/api/health`). The live F
 
 - ~~`POST /api/config/upload`~~ — print jobs send SVG via multipart only.
 - ~~`POST /api/config/scanner/focus-adjust`~~ — use scanner service `POST /session/focus-adjust` (see `FLASK_SCANNER_HTTP_INTEGRATION.md`).
+- ~~`POST /api/config/scanner/manual-config`~~ — embedded in `POST /api/config/ui-profile` capture settings.
+- ~~`GET /api/config/serial-ports`~~ / ~~`GET /api/config/serial-port-check`~~ — use Desktop App / CLI direct serial scan.
+- ~~`POST /api/config/auto-connect`~~ / ~~`POST /api/config/disconnect`~~ — use Desktop App / CLI direct serial connect/disconnect.
 - ~~`POST /api/config/capture/request`~~ — call `CAPTURE_RESET_URL` from deployment automation.
 - ~~`GET /api/config/requests`~~ / ~~`GET /api/config/requests/{id}`~~ — removed.

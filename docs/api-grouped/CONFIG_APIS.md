@@ -23,65 +23,23 @@ Load defaults/UI config at startup.
 ### What it takes
 - No body, requires `X-API-Key`.
 ### Response
-- `defaultComPort`, `defaultBaudRate`, scanner/capture config flags.
+- Scanner/capture config flags.
 ### Error codes
 - No endpoint-specific runtime error code.
 
-## `GET /api/config/serial-ports`
+## Serial connect/disconnect
 ### Description
-Lists valid serial ports for current OS.
+Serial scan/check/connect/disconnect config APIs were removed.
 ### How to use
-Populate connection dropdown.
-### What it takes
-- No body, requires `X-API-Key`.
-### Response
-- `ports[]` with `device`, `description`, `manufacturer`.
-### Error codes
-- `SERIAL_LIST_UNAVAILABLE` (503)
-- `SERIAL_LIST_FAILED` (500)
+Use the Desktop App local USB panel or CLI direct serial commands:
 
-## `GET /api/config/serial-port-check`
-### Description
-Validates one serial port path/device.
-### How to use
-Check selected port before connect.
-### What it takes
-- Query param `device`.
-- Requires `X-API-Key`.
-### Response
-- `device`, `exists`, `readable`, `writable`, `resolvedTarget`.
-### Error codes
-- `SERIAL_DEVICE_REQUIRED` (400)
-- `SERIAL_DEVICE_INVALID` (400)
+```bash
+python -m plotter_signature.cli scan-serial --device-match "CH340"
+python -m plotter_signature.cli connect --device-match "CH340"
+python -m plotter_signature.cli disconnect
+```
 
-## `POST /api/config/auto-connect`
-### Description
-Opens printer serial connection using **AutoConnect** (optional explicit `comPort`, else default + enumerated ports). Flask and FastAPI also run **the same resolver once at process startup** by default (**`AUTO_CONNECT_ON_STARTUP`** can be `0` / `false` / `no` / `off` to disable).
-### How to use
-Send optional `comPort` / `baudRate`, or `{}` for discovery.
-### What it takes
-- JSON body optional.
-- Requires `X-API-Key` when `PLOTTER_API_KEY` is set on the server.
-### Response
-- Printer status model after connect.
-### Error codes
-- `ALREADY_CONNECTED` (409)
-- `INVALID_BAUD_RATE` (400)
-- `AUTO_CONNECT_FAILED` (400)
-- `CONNECT_FAILED` (400)
-
-## `POST /api/config/disconnect`
-### Description
-Closes printer connection if safe.
-### How to use
-Call from config UI disconnect action.
-### What it takes
-- No body, requires `X-API-Key`.
-### Response
-- Printer status model after disconnect.
-### Error codes
-- `NOT_CONNECTED` (409)
-- `PRINTER_BUSY` (409)
+`--device-match` is matched against `device`, `name`, `description`, `manufacturer`, and `hwid`.
 
 ## `POST /api/config/change-pen/start`
 ## `POST /api/config/change-pen/finish`
@@ -146,21 +104,9 @@ Set optional query (`fps`, `width`, `fisheye`) and bind image source.
 - `SCANNER_STREAM_UNREACHABLE` (502)
 - `SCANNER_STREAM_FAILED` (500)
 
-## `POST /api/config/scanner/manual-config`
+## Scanner manual config
 ### Description
-Applies scanner session config (focus mode + optional quad points).
-### How to use
-Send autofocus/manual focus (and optional quad points).
-### What it takes
-- JSON payload required.
-- Requires `X-API-Key`.
-### Response
-- Scanner config apply result.
-### Error codes
-- `SCANNER_CONFIG_REQUIRED` (400)
-- `SCANNER_HTTP_ERROR` (502)
-- `SCANNER_UNREACHABLE` (502)
-- `SCANNER_CONFIG_FAILED` (500)
+Scanner manual config is no longer a standalone API route. It is embedded in `POST /api/config/ui-profile` under the `capture` section (`autofocus_enabled`, `manual_focus_value`, `quad_points`).
 
 ## `POST /api/config/scanner/capture/oneshot`
 ### Description

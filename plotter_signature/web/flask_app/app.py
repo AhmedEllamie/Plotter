@@ -845,8 +845,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return api_success(
             message="Runtime config loaded.",
             data={
-                "defaultComPort": provider.printer_service.default_com_port,
-                "defaultBaudRate": provider.printer_service.default_baud_rate,
                 "captureResetConfigured": capture_settings.is_configured,
                 "captureResetMethod": capture_settings.reset_method,
                 "scannerServiceConfigured": scanner_settings.is_configured,

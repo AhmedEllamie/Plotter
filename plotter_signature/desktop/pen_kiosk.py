@@ -8,17 +8,11 @@ import threading
 from pathlib import Path
 from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
 
-try:
-    import serial
-    from serial.tools import list_ports
-except ImportError as _serial_import_error:  # pragma: no cover - optional until pyserial installed
-    serial = None  # type: ignore[assignment]
-    list_ports = None  # type: ignore[assignment]
-    _SERIAL_IMPORT_ERROR = _serial_import_error
-else:
-    _SERIAL_IMPORT_ERROR = None
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from plotter_signature.cli import CliSerialConnectError, connect_printer_serial, scan_serial_devices
+from plotter_signature.dependency_injection import get_service_provider
 
 _DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
 
@@ -42,19 +36,20 @@ def _load_kiosk_settings() -> dict[str, str]:
     if not isinstance(data, dict):
         return {}
     out: dict[str, str] = {}
-    for key in ("api_base_url", "com_port_override"):
+    for key in ("api_base_url", "com_port_override", "device_match"):
         val = data.get(key)
         if isinstance(val, str):
             out[key] = val.strip()
     return out
 
 
-def _save_kiosk_settings(api_base_url: str, com_port_override: str) -> None:
+def _save_kiosk_settings(api_base_url: str, com_port_override: str, device_match: str = "") -> None:
     path = _kiosk_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "api_base_url": api_base_url.strip().rstrip("/"),
         "com_port_override": com_port_override.strip(),
+        "device_match": device_match.strip(),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -85,15 +80,17 @@ class PenKioskApp:
         self._root.configure(bg="#0f172a")
         self._root.attributes("-fullscreen", True)
         self._root.bind("<F11>", self._toggle_fullscreen)
+        self._provider = get_service_provider()
 
         self._status_poll_ms = 3000
         self._api_busy = False
-        self._serial_lock = threading.Lock()
-        self._local_serial: object | None = None
         self._http_ok = False
 
         self._server_url_var = StringVar(value=self._api_base_url)
         self._com_port_var = StringVar(value=saved.get("com_port_override", ""))
+        self._device_match_var = StringVar(
+            value=saved.get("device_match", os.getenv("PLOTTER_SERIAL_DEVICE_MATCH", ""))
+        )
 
         self._connection_badge = StringVar(value="USB: Disconnected")
         self._busy_badge = StringVar(value="Idle")
@@ -231,6 +228,22 @@ class PenKioskApp:
         Entry(
             conn_box,
             textvariable=self._com_port_var,
+            font=("Segoe UI", 13),
+            bg="#0b1220",
+            fg="#f8fafc",
+            insertbackground="#f8fafc",
+            relief="flat",
+        ).pack(fill=X, ipady=6, pady=(2, 8))
+        Label(
+            conn_box,
+            text="Plotter USB info match (optional: CH340, CP210x, VID:PID=xxxx:yyyy)",
+            bg="#111827",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w")
+        Entry(
+            conn_box,
+            textvariable=self._device_match_var,
             font=("Segoe UI", 13),
             bg="#0b1220",
             fg="#f8fafc",
@@ -485,9 +498,7 @@ class PenKioskApp:
         self._root.attributes("-fullscreen", not current)
 
     def _is_local_serial_open(self) -> bool:
-        with self._serial_lock:
-            port = self._local_serial
-            return port is not None and bool(getattr(port, "is_open", False))
+        return self._provider.printer_service.is_open
 
     def _set_usb_lamp(self, connected: bool) -> None:
         if self._connection_lamp_canvas is None or self._connection_lamp_oval is None:
@@ -514,19 +525,11 @@ class PenKioskApp:
     def _scan_local_ports(self) -> None:
         if self._api_busy:
             return
-        if serial is None or list_ports is None:
-            messagebox.showerror("Serial", f"pyserial is required: {_SERIAL_IMPORT_ERROR}")
-            return
 
         def worker() -> None:
             self._api_busy = True
             try:
-                devices: list[str] = []
-                for p in list_ports.comports():
-                    d = (p.device or "").strip()
-                    if d:
-                        devices.append(d)
-                devices.sort()
+                devices = scan_serial_devices()
                 self._root.after(0, lambda: self._present_scan_results(devices))
             except Exception as ex:
                 self._root.after(0, lambda err=ex: messagebox.showerror("Scan ports", str(err)))
@@ -535,44 +538,72 @@ class PenKioskApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _present_scan_results(self, devices: list[str]) -> None:
+    def _present_scan_results(self, devices: list[dict[str, str]]) -> None:
         if not devices:
             self._local_usb_status_var.set("Local USB: no serial ports found.")
             messagebox.showinfo("Serial ports", "No serial ports found.")
             return
         if not self._com_port_var.get().strip():
-            self._com_port_var.set(devices[0])
-        head = "\n".join(devices[:50])
+            self._com_port_var.set(devices[0]["device"])
+        rows = []
+        for item in devices[:50]:
+            meta = " | ".join(
+                part
+                for part in (
+                    item.get("device", ""),
+                    item.get("description", ""),
+                    item.get("manufacturer", ""),
+                    item.get("hwid", ""),
+                )
+                if part
+            )
+            rows.append(meta)
+        head = "\n".join(rows)
         tail = f"\n… {len(devices)} total" if len(devices) > 50 else ""
-        self._local_usb_status_var.set(f"Local USB: listed {len(devices)} port(s). First: {devices[0]}")
+        self._local_usb_status_var.set(f"Local USB: listed {len(devices)} port(s). First: {devices[0]['device']}")
         messagebox.showinfo("Serial ports", head + tail)
 
     def _connect_local_serial(self) -> None:
         if self._api_busy:
             return
-        if serial is None:
-            messagebox.showerror("Serial", f"pyserial is required: {_SERIAL_IMPORT_ERROR}")
+        device_or_match = self._com_port_var.get().strip()
+        explicit_device = device_or_match
+        device_match = self._device_match_var.get().strip()
+        if device_or_match and not (
+            device_or_match.startswith("/dev/") or re.fullmatch(r"(?i)com\d+", device_or_match)
+        ):
+            explicit_device = ""
+            device_match = device_match or device_or_match
+        if not explicit_device and not device_match:
+            messagebox.showwarning("USB connect", "Enter a device path or USB info match first.")
             return
-        device = self._com_port_var.get().strip()
-        if not device:
-            messagebox.showwarning("USB connect", "Enter a COM port or device path first.")
-            return
-        if sys.platform.startswith("win") and re.fullmatch(r"(?i)com\d+", device):
-            device = device.upper()
+        if sys.platform.startswith("win") and re.fullmatch(r"(?i)com\d+", explicit_device):
+            explicit_device = explicit_device.upper()
 
         def worker() -> None:
             self._api_busy = True
             try:
-                with self._serial_lock:
-                    if self._local_serial is not None:
-                        try:
-                            self._local_serial.close()
-                        except Exception:
-                            pass
-                        self._local_serial = None
-                    self._local_serial = serial.Serial(device, _KIOSK_SERIAL_BAUD, timeout=2)
+                result = connect_printer_serial(
+                    self._provider,
+                    com_port=explicit_device or None,
+                    baud_rate=_KIOSK_SERIAL_BAUD,
+                    device_match=device_match or None,
+                )
+                connected_port = str(result.get("connectedPort") or "")
+                if connected_port:
+                    self._root.after(0, lambda p=connected_port: self._com_port_var.set(p))
+                self._root.after(
+                    0,
+                    lambda: _save_kiosk_settings(
+                        self._api_base_url,
+                        self._com_port_var.get(),
+                        self._device_match_var.get(),
+                    ),
+                )
                 self._root.after(0, self._after_local_serial_changed)
-                self._root.after(0, lambda: _save_kiosk_settings(self._api_base_url, self._com_port_var.get()))
+            except CliSerialConnectError as ex:
+                self._root.after(0, lambda err=ex: messagebox.showerror("USB connect", json.dumps(err.payload, indent=2)))
+                self._root.after(0, self._after_local_serial_changed)
             except Exception as ex:
                 self._root.after(0, lambda err=ex: messagebox.showerror("USB connect", str(err)))
                 self._root.after(0, self._after_local_serial_changed)
@@ -583,13 +614,7 @@ class PenKioskApp:
 
     def _disconnect_local_serial(self) -> None:
         def worker() -> None:
-            with self._serial_lock:
-                if self._local_serial is not None:
-                    try:
-                        self._local_serial.close()
-                    except Exception:
-                        pass
-                    self._local_serial = None
+            self._provider.printer_service.close_port()
             self._root.after(0, self._after_local_serial_changed)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -622,7 +647,7 @@ class PenKioskApp:
             raw = f"http://{raw}"
         self._api_base_url = raw.rstrip("/")
         self._server_url_var.set(self._api_base_url)
-        _save_kiosk_settings(self._api_base_url, self._com_port_var.get())
+        _save_kiosk_settings(self._api_base_url, self._com_port_var.get(), self._device_match_var.get())
         self._append_feedback("Server URL applied.")
         self._refresh_status_now()
 

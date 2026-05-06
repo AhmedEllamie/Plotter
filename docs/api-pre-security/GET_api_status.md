@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer status fields for clients (**`port_name` is omitted** from this JSON; use connect/auto-connect responses or local COM override for port context)
+- Success data: printer status fields for clients. Serial port fields are omitted from this JSON.
 
 ## Error Response
 - Error envelope:

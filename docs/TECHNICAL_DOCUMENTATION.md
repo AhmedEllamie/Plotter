@@ -344,8 +344,6 @@ Not durable across process restart.
 
 From `api/printer_controller.py`:
 
-- `POST /printer/auto-connect`
-- `POST /printer/disconnect`
 - `GET /printer/status`
 - `POST /printer/generate`
 - `POST /printer/print`
@@ -360,8 +358,6 @@ FastAPI validation style:
 From `flask_app/app.py`:
 
 Core printer:
-- `POST /api/config/auto-connect`
-- `POST /api/config/disconnect`
 - `GET /api/cmd/status`
 - `POST /api/cmd/print`
 - `POST /api/cmd/print/bulk`
@@ -378,7 +374,6 @@ Capture and scanner:
 - `GET /api/config/capture/latest`
 - `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg` (proxy stream)
-- `POST /api/config/scanner/manual-config`
 - `POST /api/config/scanner/capture/start`
 - `GET /api/config/scanner/capture/{capture_id}/status`
 - `GET /api/config/scanner/capture/{capture_id}/result`
@@ -389,8 +384,8 @@ Capture and scanner:
 System/config:
 - `GET /api/cmd/health`
 - `GET /api/config`
-- `GET /api/config/serial-ports`
-- `GET /api/config/serial-port-check`
+
+Serial scan/check/connect/disconnect is not exposed through Flask/FastAPI config routes. The Desktop App and CLI use direct serial access and match Ubuntu USB metadata (`device`, `name`, `description`, `manufacturer`, `hwid`) with `--device-match` / `PLOTTER_SERIAL_DEVICE_MATCH`.
 
 Flask response envelope:
 - success: `{ success: true, message, data, errorCode: null }`

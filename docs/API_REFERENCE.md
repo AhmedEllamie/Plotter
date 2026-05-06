@@ -313,8 +313,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
       "job_stopped": false
     },
     "status": {
-      "is_open": true,
-      "port_name": "COM3",
       "is_printing": false,
       "bulk_requested_total": 0,
       "bulk_printed_count": 0,
@@ -360,7 +358,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
 ```json
 {
   "success": false,
-  "message": "Printer is not connected. Call POST /api/config/auto-connect first.",
+  "message": "Printer is not connected. Open the plotter from the Desktop App or CLI first.",
   "data": null,
   "errorCode": "PRINTER_STATE_ERROR",
   "details": null
@@ -433,8 +431,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
       "stopRequested": false
     },
     "status": {
-      "is_open": true,
-      "port_name": "COM3",
       "is_printing": false,
       "bulk_requested_total": 5,
       "bulk_printed_count": 5,
@@ -493,8 +489,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
   "message": "Bulk stop requested.",
   "data": {
     "status": {
-      "is_open": true,
-      "port_name": "COM3",
       "is_printing": true,
       "bulk_requested_total": 10,
       "bulk_printed_count": 3,
@@ -566,8 +560,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
   "message": "Current print job stop requested. The printer will eject and return to idle.",
   "data": {
     "status": {
-      "is_open": true,
-      "port_name": "COM3",
       "is_printing": true,
       "bulk_requested_total": 0,
       "bulk_printed_count": 0,
@@ -605,8 +597,6 @@ No parameters.
 
 | Field                      | Type      | Description                           |
 | -------------------------- | --------- | ------------------------------------- |
-| `defaultComPort`           | `string`  | Default serial device name.           |
-| `defaultBaudRate`          | `integer` | Default baud.                         |
 | `captureResetConfigured`   | `boolean` | Reset URL configured.                 |
 | `captureResetMethod`       | `string`  | e.g. `POST`, `GET` from env.          |
 | `scannerServiceConfigured` | `boolean` | `SCANNER_SERVICE_BASE_URL` non-empty. |
@@ -626,8 +616,6 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/config"
   "success": true,
   "message": "Runtime config loaded.",
   "data": {
-    "defaultComPort": "COM3",
-    "defaultBaudRate": 115200,
     "captureResetConfigured": true,
     "captureResetMethod": "POST",
     "scannerServiceConfigured": true,
@@ -642,145 +630,15 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/config"
 
 ### Config — Serial & connection
 
-#### `GET /api/config/serial-ports`
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Serial ports listed.",
-  "data": {
-    "ports": [
-      {
-        "device": "COM3",
-        "description": "USB-SERIAL CH340",
-        "manufacturer": "wch.cn"
-      },
-      {
-        "device": "COM5",
-        "description": "Silicon Labs CP210x",
-        "manufacturer": "Silicon Laboratories"
-      }
-    ]
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
----
-
-#### `GET /api/config/serial-port-check`
-
-
-| Location | Name     | Type     | Required | Description                    |
-| -------- | -------- | -------- | -------- | ------------------------------ |
-| Query    | `device` | `string` | **Yes**  | e.g. `COM3` or `/dev/ttyUSB0`. |
-
-
-**Example request**
+Serial scan/check/connect/disconnect config APIs were removed. Use the Desktop App local USB panel or CLI direct serial commands instead:
 
 ```bash
-curl -sS -G -H "X-API-Key: QSCWDVEFBRGN" \
-  --data-urlencode "device=COM3" \
-  "http://127.0.0.1:5000/api/config/serial-port-check"
+python -m plotter_signature.cli scan-serial --device-match "CH340"
+python -m plotter_signature.cli connect --device-match "CH340"
+python -m plotter_signature.cli disconnect
 ```
 
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Serial device check complete.",
-  "data": {
-    "device": "COM3",
-    "exists": true,
-    "readable": true,
-    "writable": true,
-    "resolvedTarget": "\\\\.\\COM3"
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
----
-
-#### `POST /api/config/auto-connect`
-
-Opens the printer serial link. **`comPort` / `com_port`** selects one device; **`{}`** runs **AutoConnect**: default COM from server settings, then filtered serial candidates.
-
-**Errors:** `400` `AUTO_CONNECT_FAILED` (`details.attemptedPorts`), `409` `ALREADY_CONNECTED`.
-
-**Startup:** Flask and FastAPI also run this resolver once when the process starts (**enabled by default**) unless **`AUTO_CONNECT_ON_STARTUP`** is `0`, `false`, `no`, or `off`; failures are logged and the server still listens.
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/auto-connect" \
-  -H "X-API-Key: YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d "{\"comPort\":\"COM3\",\"baudRate\":115200}"
-```
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Connected to COM3.",
-  "data": {
-    "is_open": true,
-    "port_name": "COM3",
-    "is_busy": false,
-    "is_printing": false,
-    "bulk_requested_total": 0,
-    "bulk_printed_count": 0,
-    "bulk_stop_requested": false,
-    "current_svg_total_distance_mm": 0.0,
-    "current_executed_distance_mm": 0.0,
-    "current_execution_percent": 0.0,
-    "cumulative_distance_mm": 13100.5,
-    "max_pen_distance_m": 2.5,
-    "used_pen_distance_m": 13.1,
-    "remaining_pen_percent": 89.45
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
----
-
-#### `POST /api/config/disconnect`
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Disconnected from printer.",
-  "data": {
-    "is_open": false,
-    "port_name": "N/A",
-    "is_busy": false,
-    "is_printing": false,
-    "bulk_requested_total": 0,
-    "bulk_printed_count": 0,
-    "bulk_stop_requested": false,
-    "current_svg_total_distance_mm": 0.0,
-    "current_executed_distance_mm": 0.0,
-    "current_execution_percent": 0.0,
-    "cumulative_distance_mm": 13100.5,
-    "max_pen_distance_m": 2.5,
-    "used_pen_distance_m": 13.1,
-    "remaining_pen_percent": 89.45
-  },
-  "errorCode": null,
-  "details": null
-}
-```
+`--device-match` is checked against USB serial metadata (`device`, `name`, `description`, `manufacturer`, `hwid`) so Ubuntu can move the plotter between `/dev/ttyUSB*` paths without changing the API surface.
 
 ---
 
@@ -952,42 +810,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
 Body: `multipart/x-mixed-replace` MJPEG stream (binary, not JSON).  
 Errors return JSON envelope with `SCANNER_STREAM_`*.
 
----
-
-#### `POST /api/config/scanner/manual-config`
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/scanner/manual-config" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
-  -H "Content-Type: application/json" \
-  -d "{\"autofocus_enabled\":false,\"manual_focus_value\":35,\"quad_points\":[[100,90],[600,90],[600,400],[100,400]]}"
-```
-
-**Example response** `200` (shape depends on upstream; illustrative)
-
-```json
-{
-  "success": true,
-  "message": "Scanner manual config applied.",
-  "data": {
-    "ok": true,
-    "manual_config": {
-      "autofocus_enabled": false,
-      "manual_focus_value": 35,
-      "quad_points": [[100, 90], [600, 90], [600, 400], [100, 400]],
-      "frame_width": 1280,
-      "frame_height": 720,
-      "valid": true,
-      "validation_message": "ok",
-      "updated_at": "2026-04-28T14:35:00+00:00"
-    }
-  },
-  "errorCode": null,
-  "details": null
-}
-```
+Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section (`autofocus_enabled`, `manual_focus_value`, `quad_points`). Saving the UI profile applies those settings to the scanner session when scanner integration is configured.
 
 ---
 
@@ -997,7 +820,7 @@ Single-step scanner rectification; applies manual session settings, runs the sca
 
 #### `POST /api/config/scanner/capture/oneshot`
 
-Non-empty JSON body. Scanner-session keys match `[POST /api/config/scanner/manual-config](#post-apiconfigscannermanual-config)`; `includeDataUri` is API-only and is stripped before the payload is forwarded to the scanner.
+Non-empty JSON body. Scanner-session keys match the `capture` section of `POST /api/config/ui-profile`; `includeDataUri` is API-only and is stripped before the payload is forwarded to the scanner.
 
 
 | Location | Name                 | Type                                | Required | Default | Description                                                        |
@@ -1102,8 +925,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
               "job_stopped": false
             },
             "status": {
-              "is_open": true,
-              "port_name": "COM3"
+              "is_printing": false
             }
           }
         }
@@ -1117,73 +939,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
 }
 ```
 
----
-
-#### `GET /api/config/requests/{request_id}`
-
-**Example request**
-
-```bash
-curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
-  "http://127.0.0.1:5000/api/config/requests/6ba7b810-9dad-11d1-80b4-00c04fd430c8"
-```
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Request log loaded.",
-  "data": {
-    "id": "11111111-2222-3333-4444-555555555555",
-    "requestId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-    "status": "APPROVED",
-    "statusValue": 2,
-    "approvalResponse": "{\"approved\":true}",
-    "errorMessage": null,
-    "createdAt": "2026-04-28T12:00:00+00:00",
-    "updatedAt": "2026-04-28T12:00:05+00:00",
-    "completedAt": "2026-04-28T12:01:00+00:00"
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
----
-
-#### `GET /api/config/requests`
-
-**Example request**
-
-```bash
-curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
-  "http://127.0.0.1:5000/api/config/requests?count=5"
-```
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Recent request logs loaded.",
-  "data": [
-    {
-      "id": "11111111-2222-3333-4444-555555555555",
-      "requestId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-      "status": "PRINTED",
-      "statusValue": 5,
-      "approvalResponse": null,
-      "errorMessage": null,
-      "createdAt": "2026-04-28T12:00:00+00:00",
-      "updatedAt": "2026-04-28T12:05:00+00:00",
-      "completedAt": "2026-04-28T12:05:00+00:00"
-    }
-  ],
-  "errorCode": null,
-  "details": null
-}
-```
+Request log listing/detail config APIs were removed. Use `GET /api/config/print-history` for persisted print/bulk job history.
 
 ---
 
@@ -1225,7 +981,7 @@ Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat
 
 ### PrinterStatus (as JSON)
 
-Same 13 fields as in `[GET /api/cmd/status](#get-apicmdstatus)`; keys are **snake_case** as returned by `dataclasses.asdict` (`port_name`, `is_open`, …).
+Public API status omits serial port fields (`port_name`, `is_open`). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`.
 
 ### RequestLog (as JSON)
 
@@ -1281,17 +1037,6 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | `GET`  | `/api/config` |
 
 
-**Serial & connection**
-
-
-| Method | Path                            |
-| ------ | ------------------------------- |
-| `GET`  | `/api/config/serial-ports`      |
-| `GET`  | `/api/config/serial-port-check` |
-| `POST` | `/api/config/auto-connect`     |
-| `POST` | `/api/config/disconnect`        |
-
-
 **Pen maintenance**
 
 
@@ -1310,7 +1055,6 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | Method | Path                                |
 | ------ | ----------------------------------- |
 | `GET`  | `/api/config/scanner/stream.mjpg`   |
-| `POST` | `/api/config/scanner/manual-config` |
 
 
 **Capture** (single-shot scanner storage)
