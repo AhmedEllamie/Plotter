@@ -317,7 +317,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Delegates to /api/change-pen/start or /api/change-pen/finish response
+- Delegates to /api/change-pen/start or /api/change-pen/finish response (`data` is `{}` on success for those handlers)
 
 ## Error Response
 - Error envelope:
@@ -344,7 +344,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: pen change finish result
+- Success data: empty object `{}`; use **`message`**
 
 ## Error Response
 - Error envelope:
@@ -371,7 +371,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: pen change start result
+- Success data: empty object `{}`; use **`message`**
 
 ## Error Response
 - Error envelope:
@@ -563,7 +563,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: stats
+- Success data: **`data`** with **`maxPenDistanceM` only**
 
 ## Error Response
 - Error envelope:
@@ -671,7 +671,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer void result
+- Success data (idle): empty object `{}`; use **`message`**. Busy cancel path unchanged (`data.status`).
 
 ## Error Response
 - Error envelope:

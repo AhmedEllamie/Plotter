@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: **stats** only (no **clearedUploadedSvg** field)
+- Success data: **`data`** with **`maxPenDistanceM` only** (full stats: `GET /api/cmd/status`)
 
 ## Error Response
 - Error envelope:

@@ -52,7 +52,7 @@ Pen change control endpoints (`start`, `finish`, or mode-based dispatcher).
 - `/change-pen` accepts body/form `mode=start|finish`.
 - Requires `X-API-Key`.
 ### Response
-- Pen action result object.
+- **`data`** is an empty object `{}` on success for `start` and `finish` — use **`message`** for the outcome; use `GET /api/cmd/status` for printer state.
 ### Error codes
 - `PEN_CHANGE_STATE_ERROR` (409) (`start`/`finish`)
 - `PEN_CHANGE_START_FAILED` (500)
@@ -68,7 +68,7 @@ Send optional `maxPenDistanceM`.
 - JSON body optional.
 - Requires `X-API-Key` when server auth is enabled.
 ### Response
-- `stats`.
+- **`data`** with **`maxPenDistanceM` only** (use `GET /api/cmd/status` for full distance fields).
 ### Error codes
 - `PRINTER_BUSY` (409)
 - `RESET_VALIDATION_ERROR` (400)

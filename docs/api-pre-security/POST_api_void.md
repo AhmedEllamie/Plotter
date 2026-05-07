@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer void result
+- Success data (idle): empty object `{}`; use **`message`** for the outcome. When busy (cancel path): `data.status` (printer status object).
 
 ## Error Response
 - Error envelope:

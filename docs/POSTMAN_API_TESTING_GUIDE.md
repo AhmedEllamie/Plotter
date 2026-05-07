@@ -94,7 +94,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required); optional `printRequestJson` or JSON / form print settings | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, `result`, `status`, … See [API_REFERENCE](API_REFERENCE.md#post-apicmdprint). 202: `queued: true`, `jobId`, `queuePosition`, … |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `copies`, `bulkProgress` when completed |
 | POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — cooperative bulk cancel |
-| POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Idle: [PrintResponse](API_REFERENCE.md#printresponse-as-json)-like object. Busy: `{ "status": … }` |
+| POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Idle: `data` is `{}` (use `message`). Busy: `{ "status": … }` |
 
 ### Common command error codes (non-exhaustive)
 
@@ -137,10 +137,10 @@ python -m plotter_signature.cli disconnect
 
 | Method | Path | Body / params | Typical success |
 | ------ | ---- | ------------- | --------------- |
-| POST | `/api/config/change-pen/start` | `{}` | 200 — [PrintResponse](API_REFERENCE.md#printresponse-as-json)-like |
+| POST | `/api/config/change-pen/start` | `{}` | 200 — `data` is `{}` (use `message`) |
 | POST | `/api/config/change-pen/finish` | `{}` | 200 — same |
-| POST | `/api/config/change-pen` | JSON `{"mode":"start"}` or `{"mode":"finish"}` | 200 — delegates to start/finish |
-| POST | `/api/config/reset` | Optional `{"maxPenDistanceM": 3.0}` | 200 — `data.stats` (distance reset) |
+| POST | `/api/config/change-pen` | JSON `{"mode":"start"}` or `{"mode":"finish"}` | 200 — delegates to start/finish (`data` `{}`) |
+| POST | `/api/config/reset` | Optional `{"maxPenDistanceM": 3.0}` | 200 — `data` with **`maxPenDistanceM` only** |
 | POST | `/api/config/pen-max-distance` | `{"meters": 2.75}` (or form key per server validation) | 200 — `data.stats` |
 
 ---

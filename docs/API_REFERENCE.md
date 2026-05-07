@@ -515,7 +515,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
 | —        | —    | —    | —        | No body.    |
 
 
-**Idle printer — success `data`:** `[PrintResponse](#printresponse-as-json)` object.
+**Idle printer — success `data`:** empty object `{}`. Use **`message`** for the outcome text; use [`GET /api/cmd/status`](#get-apicmdstatus) for live printer state.
 
 **Busy printer — success `data`:** `{ "status": <PrinterStatus> }` (same as bulk stop).
 
@@ -534,17 +534,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
 {
   "success": true,
   "message": "Void print completed.",
-  "data": {
-    "message": "Void print complete - paper ejected without printing.",
-    "commands_sent": 0,
-    "copies": 0,
-    "total_commands_sent": 0,
-    "svg_total_distance_mm": 0.0,
-    "executed_distance_mm": 0.0,
-    "execution_percent": 0.0,
-    "cumulative_distance_mm": 13100.5,
-    "job_stopped": false
-  },
+  "data": {},
   "errorCode": null,
   "details": null
 }
@@ -644,23 +634,17 @@ python -m plotter_signature.cli disconnect
 
 #### `POST /api/config/change-pen/start`
 
+No body. Printer must be connected and not busy.
+
+**Success `data`:** empty object `{}`. Use **`message`** for the outcome text; use [`GET /api/cmd/status`](#get-apicmdstatus) for live printer state.
+
 **Example response** `200`
 
 ```json
 {
   "success": true,
   "message": "Pen change start completed.",
-  "data": {
-    "message": "Pen change start complete. Replace pen, then run pen-change-finish.",
-    "commands_sent": 2,
-    "copies": 0,
-    "total_commands_sent": 0,
-    "svg_total_distance_mm": 0.0,
-    "executed_distance_mm": 0.0,
-    "execution_percent": 0.0,
-    "cumulative_distance_mm": 13100.5,
-    "job_stopped": false
-  },
+  "data": {},
   "errorCode": null,
   "details": null
 }
@@ -672,7 +656,7 @@ python -m plotter_signature.cli disconnect
 
 No body. Same preconditions as **start** (printer connected, not busy).
 
-**Success `data`:** `[PrintResponse](#printresponse-as-json)`.
+**Success `data`:** empty object `{}`. Use **`message`** for the outcome text; use [`GET /api/cmd/status`](#get-apicmdstatus) for live printer state.
 
 **Example request**
 
@@ -689,17 +673,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen/finish" \
 {
   "success": true,
   "message": "Pen change finish completed.",
-  "data": {
-    "message": "Pen change finish complete. Printer is ready to continue.",
-    "commands_sent": 2,
-    "copies": 0,
-    "total_commands_sent": 0,
-    "svg_total_distance_mm": 0.0,
-    "executed_distance_mm": 0.0,
-    "execution_percent": 0.0,
-    "cumulative_distance_mm": 13100.5,
-    "job_stopped": false
-  },
+  "data": {},
   "errorCode": null,
   "details": null
 }
@@ -738,22 +712,14 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/reset" \
   "success": true,
   "message": "Printer distance stats reset.",
   "data": {
-    "stats": {
-      "currentSvgTotalDistanceMm": 0.0,
-      "currentExecutedDistanceMm": 0.0,
-      "currentExecutionPercent": 0.0,
-      "cumulativeDistanceMm": 0.0,
-      "maxPenDistanceM": 3.0,
-      "usedPenDistanceM": 0.0,
-      "remainingPenPercent": 100.0
-    }
+    "maxPenDistanceM": 3.0
   },
   "errorCode": null,
   "details": null
 }
 ```
 
-`stats` matches `PrinterService.get_distance_stats()` (camelCase keys, numeric values).
+**`data`** contains **`maxPenDistanceM` only** (meters after reset). Use **`GET /api/cmd/status`** if you need full distance telemetry.
 
 ---
 

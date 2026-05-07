@@ -137,7 +137,7 @@ Use after rejection or maintenance when idle; use as an emergency **stop** while
 - Requires header: `X-API-Key`.
 
 ### Response
-- Idle: void operation result object (`PrintResponse`).
+- Idle: **`data`** is an empty object `{}` — use **`message`** for the outcome text; use `GET /api/cmd/status` for state.
 - Busy: same shape as bulk stop — `data.status` with updated `PrinterStatus` (cancel requested; job finishes asynchronously on the worker).
 
 ### Error codes
