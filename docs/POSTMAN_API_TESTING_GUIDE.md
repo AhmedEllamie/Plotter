@@ -90,7 +90,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | Method | Path | Body / params | Typical success HTTP | What to expect in `data` |
 | ------ | ---- | ------------- | -------------------- | -------------------------- |
 | GET | `/api/cmd/health` | — | 200 | `printerConnected`, `printerBusy`, `captureResetConfigured` |
-| GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name` on this route) |
+| GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
 | POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required); optional `printRequestJson` or JSON / form print settings | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, `result`, `status`, … See [API_REFERENCE](API_REFERENCE.md#post-apicmdprint). 202: `queued: true`, `jobId`, `queuePosition`, … |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `copies`, `bulkProgress` when completed |
 | POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — cooperative bulk cancel |

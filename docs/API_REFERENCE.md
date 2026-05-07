@@ -171,12 +171,12 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 | —        | —    | —    | —        | No parameters. |
 
 
-**Success `data` object — public `PrinterStatus` (serial port name is not exposed on this route)**
+**Success `data` object — public status (serial **port name** is not exposed; use **`printer_connected`** for link state)**
 
 
 | Field                           | Type      | Description                                               |
 | ------------------------------- | --------- | --------------------------------------------------------- |
-| `is_open`                       | `boolean` | `true` if serial port is open.                            |
+| `printer_connected`             | `boolean` | `true` if the **HTTP server** has the serial port open.   |
 | `is_busy`                       | `boolean` | `true` during print, bulk, void, or pen change.         |
 | `is_printing`                   | `boolean` | `true` only during **print** or **bulk** jobs.          |
 | `bulk_requested_total`          | `integer` | Bulk job: total copies requested (last bulk job context). |
@@ -205,8 +205,8 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 {
   "success": true,
   "message": "Printer status loaded.",
-  "data": {
-    "is_open": true,
+    "data": {
+    "printer_connected": true,
     "is_busy": false,
     "is_printing": false,
     "bulk_requested_total": 0,
@@ -955,7 +955,7 @@ Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat
 
 ### PrinterStatus (as JSON)
 
-Public API status omits serial port fields (`port_name`, `is_open`). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`.
+Public API status omits serial **`port_name`**. The **`GET /api/cmd/status`** response adds **`printer_connected`** (same meaning as internal `is_open` on the server). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`.
 
 ### RequestLog (as JSON)
 

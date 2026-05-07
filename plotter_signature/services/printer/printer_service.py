@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
 import sys
@@ -22,11 +23,17 @@ except ImportError:  # pragma: no cover - depends on environment
 
 AUTCONNECT_PROBE_CAP = 32
 
+logger = logging.getLogger(__name__)
+
 
 class AutoConnectFailedError(RuntimeError):
     def __init__(self, message: str, *, attempted_ports: list[str]) -> None:
         super().__init__(message)
         self.attempted_ports = attempted_ports
+
+
+class SerialIdentityError(RuntimeError):
+    """Unprompted serial banner did not contain required firmware markers."""
 
 
 class PrinterService(IPrinterService):
@@ -43,6 +50,7 @@ class PrinterService(IPrinterService):
         self._stop_requested = threading.Event()
         self._bulk_requested_total = 0
         self._bulk_printed_count = 0
+        self._serial_lock = threading.RLock()
 
     _COMMAND_VALUE_PATTERN = re.compile(r"([A-Za-z])\s*(-?\d+(?:\.\d+)?)")
 
@@ -77,6 +85,10 @@ class PrinterService(IPrinterService):
         return self._settings.baud_rate
 
     def open_port(self, com_port: str | None = None, baud_rate: int | None = None) -> None:
+        with self._serial_lock:
+            self._open_port_core(com_port, baud_rate)
+
+    def _open_port_core(self, com_port: str | None = None, baud_rate: int | None = None) -> None:
         if serial is None:
             raise RuntimeError("pyserial is not installed. Install requirements first.")
 
@@ -103,12 +115,56 @@ class PrinterService(IPrinterService):
                 "bundled systemd unit when non-root, and see docs/UBUNTU_RELEASE_GUIDE.md."
             ) from ex
 
-        # Match the C# serial settings and startup delay.
         self._port.dtr = True
         self._port.rts = True
         time.sleep(1.5)
+
+        markers = [m for m in self._settings.serial_identity_contains if m]
+        if self._settings.verify_serial_identity and markers:
+            banner = self._read_serial_identity_banner(self._settings.serial_identity_timeout_seconds)
+            if not self._serial_identity_satisfied(banner, markers):
+                logger.warning(
+                    "Serial identity mismatch on %s (banner length=%s).",
+                    port_name,
+                    len(banner),
+                )
+                self._close_port_unlocked()
+                raise SerialIdentityError(
+                    f"Serial identity check failed on {port_name}: "
+                    f"expected substrings {markers!r} in boot banner.",
+                )
+        elif self._settings.verify_serial_identity and not markers:
+            logger.warning("VerifySerialIdentity is true but SerialIdentityContains is empty; skipping banner check.")
+
         self._port.reset_input_buffer()
         self._port.reset_output_buffer()
+
+    def _serial_identity_satisfied(self, banner: str, markers: list[str]) -> bool:
+        blob = banner.lower()
+        return all(m.lower() in blob for m in markers)
+
+    def _read_serial_identity_banner(self, timeout_seconds: float) -> str:
+        if not self._port or not self._port.is_open:
+            return ""
+        deadline = time.monotonic() + max(0.05, timeout_seconds)
+        parts: list[str] = []
+        while time.monotonic() < deadline:
+            waiting = getattr(self._port, "in_waiting", 0)
+            if waiting > 0:
+                raw = self._port.read(waiting)
+                if raw:
+                    parts.append(raw.decode("ascii", errors="ignore"))
+            blob = "".join(parts)
+            markers = [m for m in self._settings.serial_identity_contains if m]
+            if markers and self._serial_identity_satisfied(blob, markers):
+                return blob
+            time.sleep(0.01)
+        return "".join(parts)
+
+    def _close_port_unlocked(self) -> None:
+        if self._port and self._port.is_open:
+            self._port.close()
+        self._port = None
 
     @staticmethod
     def list_filtered_serial_device_names() -> list[str]:
@@ -161,23 +217,46 @@ class PrinterService(IPrinterService):
         if not targets:
             raise AutoConnectFailedError("No serial ports to try.", attempted_ports=[])
         last_err = ""
-        for port in targets:
-            attempted.append(port)
-            try:
-                self.open_port(port, baud)
-                return
-            except Exception as ex:
-                last_err = str(ex)
-                self.close_port()
+        with self._serial_lock:
+            for port in targets:
+                attempted.append(port)
+                try:
+                    self._open_port_core(port, baud)
+                    return
+                except Exception as ex:
+                    last_err = str(ex)
+                    self._close_port_unlocked()
         raise AutoConnectFailedError(
             f"Could not open any serial port. Last error: {last_err}",
             attempted_ports=attempted,
         )
 
+    def ensure_serial_ready(self, max_attempts: int = 3, delay_seconds: float = 0.3) -> None:
+        if self.is_open:
+            return
+        last_err: BaseException | None = None
+        for attempt in range(max_attempts):
+            logger.info("ensure_serial_ready: reconnect attempt %s/%s", attempt + 1, max_attempts)
+            try:
+                self.autoconnect()
+                if self.is_open:
+                    logger.info("ensure_serial_ready: connected on %s", self.port_name)
+                    return
+            except AutoConnectFailedError as ex:
+                last_err = ex
+                logger.warning("ensure_serial_ready: autoconnect failed: %s", ex)
+            except Exception as ex:
+                last_err = ex
+                logger.warning("ensure_serial_ready: unexpected error: %s", ex)
+            if attempt < max_attempts - 1:
+                time.sleep(delay_seconds)
+        raise RuntimeError(
+            "Printer serial port is not available after reconnect attempts.",
+        ) from last_err
+
     def close_port(self) -> None:
-        if self._port and self._port.is_open:
-            self._port.close()
-        self._port = None
+        with self._serial_lock:
+            self._close_port_unlocked()
 
     def get_status(self) -> PrinterStatus:
         current_percent = self._calculate_execution_percent(

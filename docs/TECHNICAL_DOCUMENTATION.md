@@ -52,7 +52,7 @@ Main runtime components:
 6. **Frontend and operator surfaces**
    - Browser UI: `flask_app/static/index.html`, `app.js`, `styles.css`
    - Configuration page: `flask_app/static/configuration.html`, `configuration.js`
-   - Optional fullscreen pen control app: `flask_app/pen_kiosk_app.py`
+   - Optional fullscreen pen control app: `plotter_signature/desktop/pen_kiosk.py`
 
 ---
 
@@ -106,10 +106,11 @@ Used for:
 
 ### 4.4 Tkinter Pen Kiosk Mode
 
-`python -m Software.flask_app.pen_kiosk_app`
+`python -m plotter_signature.desktop.pen_kiosk`
 
 - Fullscreen desktop operator UI
 - Uses Flask backend endpoints over HTTP (`/api/cmd/status`, `/api/config/change-pen/*`, `/api/config/reset`, `/api/config/pen-max-distance`)
+- Does not open local USB; plotter serial is owned by the Flask server process (`printer_connected` in status reflects that link)
 
 ---
 
@@ -188,7 +189,11 @@ Implemented in `services/printer/printer_service.py`.
   - parity none, 8-bit, 1 stop bit
   - timeout `0`, write timeout `2.0`
   - DTR/RTS enabled
-  - startup wait `1.5s` before buffer reset
+  - startup wait `1.5s` after open
+- **Boot banner identity (optional):** Before clearing RX/TX, the service may read unprompted firmware text for a configurable time and require substring markers (default: `start`, `Marlin K_AT`). Configure via `appsettings.json` → `Printer.VerifySerialIdentity`, `SerialIdentityContains`, `SerialIdentityTimeoutSeconds`. Set `VerifySerialIdentity` to `false` to skip (e.g. bring-up). On mismatch, the port is closed and **AutoConnect** tries the next candidate port.
+- After a successful identity check (or when verification is off), input/output buffers are reset (as before).
+- `autoconnect()` and `open_port()` are serialized with an internal `RLock` so concurrent open/close does not race.
+- **`ensure_serial_ready(max_attempts=3)`** (used by HTTP print/pen/void guards): if the port is not open, retries `autoconnect()` with a short delay so idle disconnects do not require a full process restart.
 
 ### 7.2 Print Lifecycle
 
@@ -443,14 +448,13 @@ Capabilities include:
 
 ### 13.2 Pen Kiosk Desktop App
 
-`flask_app/pen_kiosk_app.py`:
+`plotter_signature/desktop/pen_kiosk.py` (entry: `python -m plotter_signature.desktop.pen_kiosk`):
+
 - fullscreen Tkinter app
-- polls `/api/status` every 3s
-- actions:
-  - PenDown / PenUp
-  - set max pen distance
-  - reset cumulative distance
-- intended for kiosk sessions and operator-only maintenance station
+- polls **`GET /api/cmd/status`** every 3s (with `X-API-Key` when required)
+- shows **API reachability** and **`printer_connected`** (serial is opened only by the Flask/server process; the kiosk does not use local USB connect/disconnect)
+- server URL + **Apply** (persisted locally as `api_base_url` only)
+- HTTP actions: PenDown / PenUp, max pen distance, reset cumulative distance
 
 ---
 
@@ -496,7 +500,7 @@ Uses env file:
 ### 15.2 Kiosk Service
 
 Runs:
-- `/opt/plotter-signature/.venv/bin/python -m Software.flask_app.pen_kiosk_app`
+- `/opt/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk`
 
 Intended for graphical user session; separate from Flask backend service.
 

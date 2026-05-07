@@ -41,6 +41,23 @@ def _load_default_config() -> dict[str, Any]:
         return json.load(f)
 
 
+def _parse_serial_identity_contains(raw: Any) -> list[str] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    if isinstance(raw, list):
+        out: list[str] = []
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out if out else None
+    return None
+
+
+_DEFAULT_SERIAL_MARKERS = ("Marlin K_AT", "start")
+
+
 def build_service_provider(config: dict[str, Any] | None = None) -> ServiceProvider:
     config = config or _load_default_config()
 
@@ -48,9 +65,15 @@ def build_service_provider(config: dict[str, Any] | None = None) -> ServiceProvi
     retry_cfg = config.get("PrintRetry", {})
     approval_cfg = config.get("ApprovalService", {})
 
+    identity_markers = _parse_serial_identity_contains(printer_cfg.get("SerialIdentityContains"))
+    if identity_markers is None:
+        identity_markers = list(_DEFAULT_SERIAL_MARKERS)
     printer_settings = PrinterSettings(
         com_port=str(printer_cfg.get("ComPort", "COM5")),
         baud_rate=int(printer_cfg.get("BaudRate", 250000)),
+        verify_serial_identity=parse_bool(printer_cfg.get("VerifySerialIdentity"), default=True),
+        serial_identity_contains=identity_markers,
+        serial_identity_timeout_seconds=float(printer_cfg.get("SerialIdentityTimeoutSeconds", 3.0)),
     )
     print_retry_settings = PrintRetrySettings(
         max_retries=int(retry_cfg.get("MaxRetries", 3)),

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import sys
 import threading
 from pathlib import Path
 from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
@@ -11,12 +9,7 @@ from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, S
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from plotter_signature.cli import CliSerialConnectError, connect_printer_serial, scan_serial_devices
-from plotter_signature.dependency_injection import get_service_provider
-
 _DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
-
-_KIOSK_SERIAL_BAUD = 250000
 
 
 def _kiosk_settings_path() -> Path:
@@ -35,23 +28,17 @@ def _load_kiosk_settings() -> dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
-    out: dict[str, str] = {}
-    for key in ("api_base_url", "com_port_override", "device_match"):
-        val = data.get(key)
-        if isinstance(val, str):
-            out[key] = val.strip()
-    return out
+    val = data.get("api_base_url")
+    return {"api_base_url": val.strip()} if isinstance(val, str) else {}
 
 
-def _save_kiosk_settings(api_base_url: str, com_port_override: str, device_match: str = "") -> None:
+def _save_kiosk_settings(api_base_url: str) -> None:
     path = _kiosk_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "api_base_url": api_base_url.strip().rstrip("/"),
-        "com_port_override": com_port_override.strip(),
-        "device_match": device_match.strip(),
-    }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps({"api_base_url": api_base_url.strip().rstrip("/")}, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _read_plotter_api_key_from_file(path: str) -> str:
@@ -80,21 +67,14 @@ class PenKioskApp:
         self._root.configure(bg="#0f172a")
         self._root.attributes("-fullscreen", True)
         self._root.bind("<F11>", self._toggle_fullscreen)
-        self._provider = get_service_provider()
 
         self._status_poll_ms = 3000
         self._api_busy = False
         self._http_ok = False
+        self._plotter_connected = False
 
         self._server_url_var = StringVar(value=self._api_base_url)
-        self._com_port_var = StringVar(value=saved.get("com_port_override", ""))
-        self._device_match_var = StringVar(
-            value=saved.get("device_match", os.getenv("PLOTTER_SERIAL_DEVICE_MATCH", ""))
-        )
-
-        self._connection_badge = StringVar(value="USB: Disconnected")
-        self._busy_badge = StringVar(value="Idle")
-        self._local_usb_status_var = StringVar(value="Local USB: not connected")
+        self._link_detail_var = StringVar(value="Checking…")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
         self._execution_percent_value = StringVar(value="0.00%")
@@ -104,20 +84,18 @@ class PenKioskApp:
         self._max_pen_distance_var = StringVar(value="")
         self._inline_error_var = StringVar(value="")
 
-        self._link_detail_var = StringVar(value="Checking…")
-
-        self._connection_badge_label: Label | None = None
-        self._busy_badge_label: Label | None = None
-        self._feedback_box = None
-        self._status_card: Frame | None = None
-        self._connection_card: Frame | None = None
-        self._change_pen_card: Frame | None = None
-        self._active_card_idx = 0  # 0=Status, 1=Port/Connect, 2=Change Pen
         self._mode_label_var = StringVar(value="Status")
+        self._plotter_badge_label: Label | None = None
+        self._busy_badge_label: Label | None = None
+        self._server_badge_label: Label | None = None
+        self._status_card: Frame | None = None
+        self._change_pen_card: Frame | None = None
+        self._active_card_idx = 0
         self._switch_canvas: Canvas | None = None
         self._switch_knob: int | None = None
-        self._connection_lamp_canvas: Canvas | None = None
-        self._connection_lamp_oval: int | None = None
+        self._link_lamp_canvas: Canvas | None = None
+        self._link_lamp_oval: int | None = None
+
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -135,17 +113,16 @@ class PenKioskApp:
         ).pack(side=RIGHT)
         self._switch_canvas = Canvas(
             switch_row,
-            width=204,
+            width=140,
             height=44,
             bg="#0f172a",
             highlightthickness=0,
             bd=0,
         )
         self._switch_canvas.pack(side=RIGHT, padx=(0, 10))
-        self._switch_canvas.create_rectangle(4, 10, 200, 34, outline="#64748b", fill="#1e293b", width=2)
+        self._switch_canvas.create_rectangle(4, 10, 136, 34, outline="#64748b", fill="#1e293b", width=2)
         self._switch_canvas.create_text(36, 22, text="S", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
-        self._switch_canvas.create_text(102, 22, text="C", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
-        self._switch_canvas.create_text(168, 22, text="P", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
+        self._switch_canvas.create_text(104, 22, text="P", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
         self._switch_knob = self._switch_canvas.create_oval(8, 12, 56, 32, fill="#e2e8f0", outline="#cbd5e1")
         self._switch_canvas.bind("<Button-1>", self._toggle_cards_event)
 
@@ -162,16 +139,6 @@ class PenKioskApp:
         )
         self._build_status_card(self._status_card)
 
-        self._connection_card = Frame(
-            cards_container,
-            bg="#111827",
-            padx=20,
-            pady=20,
-            highlightbackground="#334155",
-            highlightthickness=1,
-        )
-        self._build_connection_card(self._connection_card)
-
         self._change_pen_card = Frame(
             cards_container,
             bg="#111827",
@@ -184,102 +151,6 @@ class PenKioskApp:
 
         self._apply_active_card()
 
-    def _build_connection_card(self, parent: Frame) -> None:
-        Label(
-            parent,
-            text="Port / Connect",
-            bg="#111827",
-            fg="#f8fafc",
-            font=("Segoe UI", 18, "bold"),
-        ).pack(anchor="w", pady=(0, 10))
-
-        conn_box = Frame(parent, bg="#111827")
-        conn_box.pack(fill=BOTH, expand=True)
-        Label(conn_box, text="Printer IP / server URL", bg="#111827", fg="#94a3b8", font=("Segoe UI", 11, "bold")).pack(
-            anchor="w"
-        )
-        Entry(
-            conn_box,
-            textvariable=self._server_url_var,
-            font=("Segoe UI", 13),
-            bg="#0b1220",
-            fg="#f8fafc",
-            insertbackground="#f8fafc",
-            relief="flat",
-        ).pack(fill=X, ipady=6, pady=(2, 6))
-        apply_row = Frame(conn_box, bg="#111827")
-        apply_row.pack(fill=X, pady=(0, 10))
-        Button(
-            apply_row,
-            text="Apply server",
-            command=self._apply_server_url,
-            bg="#334155",
-            fg="#ffffff",
-            activeforeground="#ffffff",
-            relief="flat",
-            padx=16,
-            pady=10,
-            font=("Segoe UI", 12, "bold"),
-            cursor="hand2",
-        ).pack(side=LEFT)
-        Label(conn_box, text="Local USB serial (this PC)", bg="#111827", fg="#94a3b8", font=("Segoe UI", 11, "bold")).pack(
-            anchor="w"
-        )
-        Entry(
-            conn_box,
-            textvariable=self._com_port_var,
-            font=("Segoe UI", 13),
-            bg="#0b1220",
-            fg="#f8fafc",
-            insertbackground="#f8fafc",
-            relief="flat",
-        ).pack(fill=X, ipady=6, pady=(2, 8))
-        Label(
-            conn_box,
-            text="Plotter USB info match (optional: CH340, CP210x, VID:PID=xxxx:yyyy)",
-            bg="#111827",
-            fg="#94a3b8",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w")
-        Entry(
-            conn_box,
-            textvariable=self._device_match_var,
-            font=("Segoe UI", 13),
-            bg="#0b1220",
-            fg="#f8fafc",
-            insertbackground="#f8fafc",
-            relief="flat",
-        ).pack(fill=X, ipady=6, pady=(2, 8))
-        btn_row = Frame(conn_box, bg="#111827")
-        btn_row.pack(fill=X)
-        for text, cmd, bgc in (
-            ("Scan ports", self._scan_local_ports, "#334155"),
-            ("Connect", self._connect_local_serial, "#0ea5e9"),
-            ("Disconnect USB", self._disconnect_local_serial, "#64748b"),
-        ):
-            Button(
-                btn_row,
-                text=text,
-                command=cmd,
-                bg=bgc,
-                fg="#ffffff",
-                activeforeground="#ffffff",
-                relief="flat",
-                padx=16,
-                pady=10,
-                font=("Segoe UI", 12, "bold"),
-                cursor="hand2",
-            ).pack(side=LEFT, padx=(0, 8))
-        Label(
-            conn_box,
-            textvariable=self._local_usb_status_var,
-            bg="#111827",
-            fg="#cbd5e1",
-            font=("Segoe UI", 12),
-            wraplength=520,
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
-
     def _build_status_card(self, parent: Frame) -> None:
         Label(
             parent,
@@ -289,13 +160,45 @@ class PenKioskApp:
             font=("Segoe UI", 18, "bold"),
         ).pack(anchor="w", pady=(0, 10))
 
+        Label(
+            parent,
+            text="Plotter server URL (Flask / plotter-signature)",
+            bg="#111827",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w")
+        server_row = Frame(parent, bg="#111827")
+        server_row.pack(fill=X, pady=(2, 6))
+        Entry(
+            server_row,
+            textvariable=self._server_url_var,
+            font=("Segoe UI", 13),
+            bg="#0b1220",
+            fg="#f8fafc",
+            insertbackground="#f8fafc",
+            relief="flat",
+        ).pack(side=LEFT, fill=X, expand=True, ipady=6, padx=(0, 8))
+        Button(
+            server_row,
+            text="Apply",
+            command=self._apply_server_url,
+            bg="#334155",
+            fg="#ffffff",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=16,
+            pady=8,
+            font=("Segoe UI", 12, "bold"),
+            cursor="hand2",
+        ).pack(side=RIGHT)
+
         link_row = Frame(parent, bg="#111827")
-        link_row.pack(fill=X, pady=(0, 12))
-        self._connection_lamp_canvas = Canvas(
+        link_row.pack(fill=X, pady=(10, 12))
+        self._link_lamp_canvas = Canvas(
             link_row, width=48, height=44, bg="#111827", highlightthickness=0, bd=0
         )
-        self._connection_lamp_canvas.pack(side=LEFT)
-        self._connection_lamp_oval = self._connection_lamp_canvas.create_oval(
+        self._link_lamp_canvas.pack(side=LEFT)
+        self._link_lamp_oval = self._link_lamp_canvas.create_oval(
             10, 6, 38, 34, fill="#64748b", outline="#475569", width=2
         )
         lbl_col = Frame(link_row, bg="#111827")
@@ -310,9 +213,11 @@ class PenKioskApp:
 
         badges_row = Frame(parent, bg="#111827")
         badges_row.pack(fill=X, pady=(0, 10))
-        self._connection_badge_label = self._badge(badges_row, self._connection_badge, ok=False)
-        self._connection_badge_label.pack(side=LEFT, padx=(0, 8))
-        self._busy_badge_label = self._badge(badges_row, self._busy_badge, ok=True)
+        self._server_badge_label = self._badge(badges_row, ok=False)
+        self._server_badge_label.pack(side=LEFT, padx=(0, 8))
+        self._plotter_badge_label = self._badge(badges_row, ok=False)
+        self._plotter_badge_label.pack(side=LEFT, padx=(0, 8))
+        self._busy_badge_label = self._badge(badges_row, ok=True)
         self._busy_badge_label.pack(side=LEFT)
 
         self._metric_row(parent, "Cumulative distance", self._cumulative_distance_value)
@@ -420,10 +325,10 @@ class PenKioskApp:
             cursor="hand2",
         ).pack(fill=X, pady=(2, 0))
 
-    def _badge(self, parent: Frame, text_variable: StringVar, ok: bool) -> Label:
+    def _badge(self, parent: Frame, *, ok: bool) -> Label:
         return Label(
             parent,
-            textvariable=text_variable,
+            text="",
             bg="#14532d" if ok else "#7f1d1d",
             fg="#dcfce7" if ok else "#fee2e2",
             font=("Segoe UI", 11, "bold"),
@@ -451,27 +356,23 @@ class PenKioskApp:
 
     _SWITCH_KNOB_POS = (
         (8, 12, 56, 32),
-        (74, 12, 122, 32),
-        (140, 12, 188, 32),
+        (80, 12, 128, 32),
     )
 
     def _move_switch_knob(self, idx: int) -> None:
         if self._switch_canvas is None or self._switch_knob is None:
             return
-        i = max(0, min(2, idx))
+        i = max(0, min(1, idx))
         x1, y1, x2, y2 = self._SWITCH_KNOB_POS[i]
         self._switch_canvas.coords(self._switch_knob, x1, y1, x2, y2)
 
     def _apply_active_card(self) -> None:
-        for card in (self._status_card, self._connection_card, self._change_pen_card):
+        for card in (self._status_card, self._change_pen_card):
             if card is not None:
                 card.pack_forget()
-        idx = max(0, min(2, self._active_card_idx))
+        idx = max(0, min(1, self._active_card_idx))
         self._active_card_idx = idx
-        if idx == 1 and self._connection_card is not None:
-            self._connection_card.pack(fill=BOTH, expand=True)
-            self._mode_label_var.set("Port / Connect")
-        elif idx == 2 and self._change_pen_card is not None:
+        if idx == 1 and self._change_pen_card is not None:
             self._change_pen_card.pack(fill=BOTH, expand=True)
             self._mode_label_var.set("Change Pen")
         elif self._status_card is not None:
@@ -482,161 +383,35 @@ class PenKioskApp:
     def _toggle_cards_event(self, event: object) -> None:
         mx = getattr(event, "x", None)
         if mx is None or self._switch_canvas is None:
-            self._active_card_idx = (self._active_card_idx + 1) % 3
+            self._active_card_idx = (self._active_card_idx + 1) % 2
             self._apply_active_card()
             return
-        if mx < 68:
+        if mx < 70:
             self._active_card_idx = 0
-        elif mx < 136:
-            self._active_card_idx = 1
         else:
-            self._active_card_idx = 2
+            self._active_card_idx = 1
         self._apply_active_card()
 
     def _toggle_fullscreen(self, _event: object) -> None:
         current = bool(self._root.attributes("-fullscreen"))
         self._root.attributes("-fullscreen", not current)
 
-    def _is_local_serial_open(self) -> bool:
-        return self._provider.printer_service.is_open
-
-    def _set_usb_lamp(self, connected: bool) -> None:
-        if self._connection_lamp_canvas is None or self._connection_lamp_oval is None:
+    def _set_link_lamp(self, ok: bool) -> None:
+        if self._link_lamp_canvas is None or self._link_lamp_oval is None:
             return
-        if connected:
+        if ok:
             fill, outline = "#22c55e", "#15803d"
         else:
             fill, outline = "#ef4444", "#b91c1c"
-        self._connection_lamp_canvas.itemconfig(self._connection_lamp_oval, fill=fill, outline=outline)
+        self._link_lamp_canvas.itemconfig(self._link_lamp_oval, fill=fill, outline=outline)
 
     def _update_link_detail_line(self) -> None:
         http = "OK" if self._http_ok else "unreachable"
-        usb = "open" if self._is_local_serial_open() else "closed"
-        self._link_detail_var.set(f"Server: {http} | Local USB: {usb}")
-
-    def _after_local_serial_changed(self) -> None:
-        o = self._is_local_serial_open()
-        self._set_usb_lamp(o)
-        self._set_badge_color(self._connection_badge_label, "USB: Connected" if o else "USB: Disconnected", o)
-        port = self._com_port_var.get().strip() or "—"
-        self._local_usb_status_var.set(f"Local USB: {port} — {'open' if o else 'closed'}")
-        self._update_link_detail_line()
-
-    def _scan_local_ports(self) -> None:
-        if self._api_busy:
-            return
-
-        def worker() -> None:
-            self._api_busy = True
-            try:
-                devices = scan_serial_devices()
-                self._root.after(0, lambda: self._present_scan_results(devices))
-            except Exception as ex:
-                self._root.after(0, lambda err=ex: messagebox.showerror("Scan ports", str(err)))
-            finally:
-                self._api_busy = False
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _present_scan_results(self, devices: list[dict[str, str]]) -> None:
-        if not devices:
-            self._local_usb_status_var.set("Local USB: no serial ports found.")
-            messagebox.showinfo("Serial ports", "No serial ports found.")
-            return
-        if not self._com_port_var.get().strip():
-            self._com_port_var.set(devices[0]["device"])
-        rows = []
-        for item in devices[:50]:
-            meta = " | ".join(
-                part
-                for part in (
-                    item.get("device", ""),
-                    item.get("description", ""),
-                    item.get("manufacturer", ""),
-                    item.get("hwid", ""),
-                )
-                if part
-            )
-            rows.append(meta)
-        head = "\n".join(rows)
-        tail = f"\n… {len(devices)} total" if len(devices) > 50 else ""
-        self._local_usb_status_var.set(f"Local USB: listed {len(devices)} port(s). First: {devices[0]['device']}")
-        messagebox.showinfo("Serial ports", head + tail)
-
-    def _connect_local_serial(self) -> None:
-        if self._api_busy:
-            return
-        device_or_match = self._com_port_var.get().strip()
-        explicit_device = device_or_match
-        device_match = self._device_match_var.get().strip()
-        if device_or_match and not (
-            device_or_match.startswith("/dev/") or re.fullmatch(r"(?i)com\d+", device_or_match)
-        ):
-            explicit_device = ""
-            device_match = device_match or device_or_match
-        if not explicit_device and not device_match:
-            messagebox.showwarning("USB connect", "Enter a device path or USB info match first.")
-            return
-        if sys.platform.startswith("win") and re.fullmatch(r"(?i)com\d+", explicit_device):
-            explicit_device = explicit_device.upper()
-
-        def worker() -> None:
-            self._api_busy = True
-            try:
-                result = connect_printer_serial(
-                    self._provider,
-                    com_port=explicit_device or None,
-                    baud_rate=_KIOSK_SERIAL_BAUD,
-                    device_match=device_match or None,
-                )
-                connected_port = str(result.get("connectedPort") or "")
-                if connected_port:
-                    self._root.after(0, lambda p=connected_port: self._com_port_var.set(p))
-                self._root.after(
-                    0,
-                    lambda: _save_kiosk_settings(
-                        self._api_base_url,
-                        self._com_port_var.get(),
-                        self._device_match_var.get(),
-                    ),
-                )
-                self._root.after(0, self._after_local_serial_changed)
-            except CliSerialConnectError as ex:
-                self._root.after(0, lambda err=ex: messagebox.showerror("USB connect", json.dumps(err.payload, indent=2)))
-                self._root.after(0, self._after_local_serial_changed)
-            except Exception as ex:
-                self._root.after(0, lambda err=ex: messagebox.showerror("USB connect", str(err)))
-                self._root.after(0, self._after_local_serial_changed)
-            finally:
-                self._api_busy = False
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _disconnect_local_serial(self) -> None:
-        def worker() -> None:
-            self._provider.printer_service.close_port()
-            self._root.after(0, self._after_local_serial_changed)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _append_feedback(self, message: str, is_error: bool = False) -> None:
-        _ = message
-        _ = is_error
-
-    def _resolve_api_key(self) -> str:
-        """Match Flask auth: prefer live env file (so key rotation applies without kiosk restart)."""
-        explicit = os.getenv("PLOTTER_API_KEY_FILE")
-        if explicit is not None:
-            path = explicit.strip()
-            if path:
-                key = _read_plotter_api_key_from_file(path)
-                if key:
-                    return key
+        if not self._http_ok:
+            pc = "—"
         else:
-            key = _read_plotter_api_key_from_file(_DEFAULT_PLOTTER_ENV_FILE)
-            if key:
-                return key
-        return (os.getenv("PLOTTER_API_KEY") or "").strip()
+            pc = "connected" if self._plotter_connected else "disconnected"
+        self._link_detail_var.set(f"API: {http} | Serial on server: {pc}")
 
     def _apply_server_url(self) -> None:
         raw = self._server_url_var.get().strip()
@@ -647,7 +422,7 @@ class PenKioskApp:
             raw = f"http://{raw}"
         self._api_base_url = raw.rstrip("/")
         self._server_url_var.set(self._api_base_url)
-        _save_kiosk_settings(self._api_base_url, self._com_port_var.get(), self._device_match_var.get())
+        _save_kiosk_settings(self._api_base_url)
         self._append_feedback("Server URL applied.")
         self._refresh_status_now()
 
@@ -655,9 +430,18 @@ class PenKioskApp:
         try:
             status = self._api_get("/api/cmd/status")
             self._http_ok = True
+            self._plotter_connected = bool(status.get("printer_connected"))
             is_busy = bool(status.get("is_busy") or status.get("is_printing"))
 
+            self._set_badge_color(self._server_badge_label, "Server: OK", True)
+            self._set_badge_color(
+                self._plotter_badge_label,
+                "Plotter: Connected" if self._plotter_connected else "Plotter: Disconnected",
+                self._plotter_connected,
+            )
             self._set_badge_color(self._busy_badge_label, "Busy" if is_busy else "Idle", not is_busy)
+
+            self._set_link_lamp(self._http_ok and self._plotter_connected)
 
             self._cumulative_distance_value.set(self._format_meters_from_mm(status.get("cumulative_distance_mm")))
             self._executed_distance_value.set(self._format_meters_from_mm(status.get("current_executed_distance_mm")))
@@ -676,15 +460,27 @@ class PenKioskApp:
                 self._max_pen_distance_var.set(str(max_pen_distance))
         except HTTPError as ex:
             self._http_ok = False
+            self._plotter_connected = False
+            self._set_badge_color(self._server_badge_label, f"Server: HTTP {ex.code}", False)
+            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
+            self._set_link_lamp(False)
             self._append_feedback(f"Status HTTP error: {ex.code}", is_error=True)
         except URLError as ex:
             self._http_ok = False
+            self._plotter_connected = False
+            self._set_badge_color(self._server_badge_label, "Server: unreachable", False)
+            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
+            self._set_link_lamp(False)
             self._append_feedback(f"Status network error: {ex.reason}", is_error=True)
         except Exception as ex:
             self._http_ok = False
+            self._plotter_connected = False
+            self._set_badge_color(self._server_badge_label, "Server: error", False)
+            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
+            self._set_link_lamp(False)
             self._append_feedback(f"Status error: {ex}", is_error=True)
 
-        self._after_local_serial_changed()
+        self._update_link_detail_line()
 
     def _request_headers(self, *, json_body: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -740,6 +536,20 @@ class PenKioskApp:
             data = parsed.get("data")
             return data if isinstance(data, dict) else {}
 
+    def _resolve_api_key(self) -> str:
+        explicit = os.getenv("PLOTTER_API_KEY_FILE")
+        if explicit is not None:
+            path = explicit.strip()
+            if path:
+                key = _read_plotter_api_key_from_file(path)
+                if key:
+                    return key
+        else:
+            key = _read_plotter_api_key_from_file(_DEFAULT_PLOTTER_ENV_FILE)
+            if key:
+                return key
+        return (os.getenv("PLOTTER_API_KEY") or "").strip()
+
     def _run_action(self, success_message: str, endpoint: str) -> None:
         if self._api_busy:
             self._append_feedback("Another action is running. Please wait.", is_error=True)
@@ -757,6 +567,10 @@ class PenKioskApp:
                 self._api_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _append_feedback(self, message: str, is_error: bool = False) -> None:
+        _ = message
+        _ = is_error
 
     def _set_max_pen_distance(self) -> None:
         raw_value = self._max_pen_distance_var.get().strip()

@@ -48,7 +48,7 @@ Poll from UI/kiosk to render connection, busy state, distance, and bulk state.
 - Requires header: `X-API-Key`.
 
 ### Response
-- Full printer status model (connection flags, distance metrics, bulk fields, pen fields).
+- Printer runtime status (same fields as internal `PrinterStatus` **except** serial port name is not exposed), plus **`printer_connected`** (`boolean`): `true` when the **server** process has the plotter serial port open.
 
 ### Error codes
 - No endpoint-specific runtime error code (auth middleware errors still apply).

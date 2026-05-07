@@ -24,6 +24,7 @@ def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
     payload = asdict(provider.printer_service.get_status())
     payload.pop("port_name", None)
     payload.pop("is_open", None)
+    payload["printer_connected"] = provider.printer_service.is_open
     return payload
 
 
@@ -52,14 +53,16 @@ def _print_request_form(
 
 
 def _ensure_connected(provider: ServiceProvider) -> None:
-    if not provider.printer_service.is_open:
+    try:
+        provider.printer_service.ensure_serial_ready()
+    except RuntimeError as ex:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Printer is not connected. Ensure the server process has opened the serial port "
                 "(startup autoconnect / deployment configuration)."
             ),
-        )
+        ) from ex
 
 
 def _ensure_not_busy(provider: ServiceProvider) -> None:

@@ -45,6 +45,10 @@ class IPrinterService(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def ensure_serial_ready(self, max_attempts: int = 3, delay_seconds: float = 0.3) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     def close_port(self) -> None:
         raise NotImplementedError
 
