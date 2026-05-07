@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: defaultComPort, defaultBaudRate, captureResetConfigured, captureResetMethod, scannerServiceConfigured, scannerServiceBaseUrl
+- Success data: captureResetConfigured, captureResetMethod, scannerServiceConfigured, scannerServiceBaseUrl
 
 ## Error Response
 - Error envelope:

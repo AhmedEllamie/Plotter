@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
+# USB serial nodes are typically root:dialout mode 660. If you override User= to a non-root
+# account, that user must be in the dialout group (usermod -aG dialout <user>).
+SupplementaryGroups=dialout
 WorkingDirectory=/opt/plotter-signature
 EnvironmentFile=/etc/plotter-signature/plotter-signature.env
 ExecStart=/opt/plotter-signature/.venv/bin/python -m plotter_signature serve-flask --host 0.0.0.0 --port 5001

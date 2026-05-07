@@ -4,7 +4,9 @@
 
 - When `PLOTTER_API_KEY` is unset or empty, `X-API-Key` is not required; when set, all `/api/*` routes require a valid key (see `API_REFERENCE.md`).
 
-**Startup:** The Flask/FastAPI processes also run the same AutoConnect logic **once at boot** (unless `AUTO_CONNECT_ON_STARTUP` is `0`/`false`/`no`/`off`); post still works for manual retries or a forced `comPort`.
+**Startup:** The Flask/FastAPI processes also run the same AutoConnect logic **once at boot** (unless `AUTO_CONNECT_ON_STARTUP` is `0`/`false`/`no`/`off`); this POST still works for manual retries or a forced `comPort`.
+
+**Desktop / CLI:** You can also use direct serial from the machine: `python -m plotter_signature.cli scan-serial --device-match "CH340"` and `connect --device-match "CH340"` (matches `device`, `name`, `description`, `manufacturer`, `hwid`).
 
 ## What It Takes
 
@@ -18,7 +20,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer status after connection (includes `port_name` where applicable; **public** `GET /api/cmd/status` omits `port_name`).
+- Success data: printer status after connection (includes `port_name` where applicable; **public** `GET /api/cmd/status` omits `port_name` / `is_open`; exposes **`printer_connected`**).
 
 ## Error Response
 

@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Delegates to /api/change-pen/start or /api/change-pen/finish response
+- Delegates to /api/change-pen/start or /api/change-pen/finish response (`data` is `{}` on success for those handlers)
 
 ## Error Response
 - Error envelope:

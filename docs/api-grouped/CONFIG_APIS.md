@@ -23,36 +23,21 @@ Load defaults/UI config at startup.
 ### What it takes
 - No body, requires `X-API-Key`.
 ### Response
-- `defaultComPort`, `defaultBaudRate`, scanner/capture config flags.
+- Scanner/capture config flags.
 ### Error codes
 - No endpoint-specific runtime error code.
 
-## `GET /api/config/serial-ports`
+## Serial (HTTP + Desktop / CLI)
 ### Description
-Lists valid serial ports for current OS.
-### How to use
-Populate connection dropdown.
-### What it takes
-- No body, requires `X-API-Key`.
-### Response
-- `ports[]` with `device`, `description`, `manufacturer`.
-### Error codes
-- `SERIAL_LIST_UNAVAILABLE` (503)
-- `SERIAL_LIST_FAILED` (500)
+Use **`GET /api/config/serial-ports`**, **`GET /api/config/serial-port-check`**, **`POST /api/config/auto-connect`**, and **`POST /api/config/disconnect`** from the config UI or automation, or use the Desktop App / CLI on the same machine:
 
-## `GET /api/config/serial-port-check`
-### Description
-Validates one serial port path/device.
-### How to use
-Check selected port before connect.
-### What it takes
-- Query param `device`.
-- Requires `X-API-Key`.
-### Response
-- `device`, `exists`, `readable`, `writable`, `resolvedTarget`.
-### Error codes
-- `SERIAL_DEVICE_REQUIRED` (400)
-- `SERIAL_DEVICE_INVALID` (400)
+```bash
+python -m plotter_signature.cli scan-serial --device-match "CH340"
+python -m plotter_signature.cli connect --device-match "CH340"
+python -m plotter_signature.cli disconnect
+```
+
+`--device-match` is matched against `device`, `name`, `description`, `manufacturer`, and `hwid`.
 
 ## `POST /api/config/auto-connect`
 ### Description
@@ -94,7 +79,7 @@ Pen change control endpoints (`start`, `finish`, or mode-based dispatcher).
 - `/change-pen` accepts body/form `mode=start|finish`.
 - Requires `X-API-Key`.
 ### Response
-- Pen action result object.
+- **`data`** is an empty object `{}` on success for `start` and `finish` — use **`message`** for the outcome; use `GET /api/cmd/status` for printer state.
 ### Error codes
 - `PEN_CHANGE_STATE_ERROR` (409) (`start`/`finish`)
 - `PEN_CHANGE_START_FAILED` (500)
@@ -110,7 +95,7 @@ Send optional `maxPenDistanceM`.
 - JSON body optional.
 - Requires `X-API-Key` when server auth is enabled.
 ### Response
-- `stats`.
+- **`data`** with **`maxPenDistanceM`**; full distance fields: `GET /api/cmd/status`.
 ### Error codes
 - `PRINTER_BUSY` (409)
 - `RESET_VALIDATION_ERROR` (400)
@@ -146,11 +131,11 @@ Set optional query (`fps`, `width`, `fisheye`) and bind image source.
 - `SCANNER_STREAM_UNREACHABLE` (502)
 - `SCANNER_STREAM_FAILED` (500)
 
-## `POST /api/config/scanner/manual-config`
+## Scanner manual config
 ### Description
-Applies scanner session config (focus mode + optional quad points).
+`POST /api/config/scanner/manual-config` applies scanner session config (focus mode + optional quad points). The same capture fields can be saved via `POST /api/config/ui-profile` under the `capture` section (`autofocus_enabled`, `manual_focus_value`, `quad_points`).
 ### How to use
-Send autofocus/manual focus (and optional quad points).
+Send autofocus/manual focus (and optional quad points) to **`POST /api/config/scanner/manual-config`**, or persist them in the UI profile.
 ### What it takes
 - JSON payload required.
 - Requires `X-API-Key`.

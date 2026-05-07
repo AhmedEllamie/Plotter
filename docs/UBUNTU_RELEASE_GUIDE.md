@@ -45,6 +45,17 @@ At minimum set:
 
 - `PLOTTER_API_KEY` to a long random shared secret **when you want API authentication**. When unset or blank, **`/api/*` does not require** `X-API-Key` (fine for isolated networks). Changing the key after deployment: edit the env file, `sudo systemctl restart plotter-signature-flask`, then update browsers/kiosk/integration clients.
 - `CAPTURE_RESET_URL` to your reset endpoint.
+- Optional `PLOTTER_SERIAL_DEVICE_MATCH` to a stable USB serial identifier for the plotter, such as `CH340`, `CP210x`, or `VID:PID=1A86:7523`.
+
+Serial scan/check/connect/disconnect config APIs are removed. Use the Desktop App local USB panel or CLI direct serial flow instead. The CLI scans Ubuntu `/dev/ttyUSB*` and `/dev/ttyACM*` devices, matches `PLOTTER_SERIAL_DEVICE_MATCH` / `--device-match` against USB metadata (`device`, `name`, `description`, `manufacturer`, `hwid`), and opens the matching plotter directly.
+
+```bash
+python -m plotter_signature.cli scan-serial --device-match "CH340"
+python -m plotter_signature.cli connect --device-match "CH340"
+python -m plotter_signature.cli disconnect
+```
+
+The Desktop App uses the same direct serial resolver for its local USB connect/disconnect controls.
 
 Unless you are on a machine **without** USB serial hardware (or CI), rely on the default: **AutoConnect runs once** when Flask/FastAPI start (same as `POST /api/config/auto-connect` with `{}`; failures are logged and the service still listens). To **disable** that probing, set **`AUTO_CONNECT_ON_STARTUP`** to `0`, `false`, `no`, or `off`.
 
@@ -67,8 +78,8 @@ sudo nano /etc/systemd/system/plotter-signature-flask.service
 
 Important fields:
 
-- `User` should be your deployment user.
-- `Group` should usually be `dialout` for serial access.
+- `User` should be your deployment user (the example unit uses `root`; many sites override to a dedicated account).
+- When not `root`, ensure **serial access**: user in **`dialout`** and the unit sets **`SupplementaryGroups=dialout`** (already present in the bundled service files).
 - `WorkingDirectory` should be your repo path.
 - `ExecStart` should point to that repo `.venv` Python.
 
@@ -86,7 +97,7 @@ sudo systemctl status plotter-signature-flask
 Local health check:
 
 ```bash
-curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health
+curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/cmd/health
 ```
 
 UI:
@@ -114,6 +125,17 @@ Common checks:
 - Printer connect fails:
   - verify `/dev/ttyUSB0` or `/dev/ttyACM0`.
   - verify user/group has `dialout`.
+  - see **USB serial permissions** below.
+
+### USB serial permissions (`Permission denied`)
+
+USB serial devices are usually owned by **`root:dialout`** with mode **`660`**. The account that runs Flask, the CLI, or the Desktop App must be able to read/write that node.
+
+1. **One-time (persistent across reboot):** `sudo usermod -aG dialout <service_user>` then log out/in, or restart the service. Group membership is stored in `/etc/group`, not lost on reboot.
+2. **systemd:** the bundled [`plotter-signature-flask.service`](../deploy/ubuntu/plotter-signature-flask.service) and [`plotter-pen-kiosk.service`](../deploy/ubuntu/plotter-pen-kiosk.service) include **`SupplementaryGroups=dialout`** so the service process receives the `dialout` group without relying on a login shell. After editing a unit: `sudo systemctl daemon-reload` and restart the service (user units: `systemctl --user daemon-reload`).
+3. **Checks:** `ls -l /dev/ttyUSB* /dev/ttyACM*`; ensure another process is not holding the port (`sudo lsof /dev/ttyUSB0`).
+
+The example Flask unit ships **`User=root`** (root bypasses `dialout`), but production often overrides **`User=`** to a non-root account; then **`dialout`** + **`SupplementaryGroups`** matter.
 
 ## 8) Update deployment (new release)
 

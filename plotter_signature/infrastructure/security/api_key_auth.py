@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 
 API_KEY_ENV_VAR = "PLOTTER_API_KEY"
+STREAM_TOKEN_ENV_VAR = "PLOTTER_STREAM_TOKEN"
 API_KEY_HEADER = "X-API-Key"
 
 
@@ -22,6 +23,24 @@ def is_api_key_required() -> bool:
 def get_configured_api_key() -> str:
     """Returns the server key when configured; empty when auth is disabled."""
     return os.getenv(API_KEY_ENV_VAR, "").strip()
+
+
+def get_effective_stream_query_secret() -> str:
+    """Secret for `token` on GET /api/config/scanner/stream.mjpg when API key auth is enabled."""
+    override = os.getenv(STREAM_TOKEN_ENV_VAR, "").strip()
+    if override:
+        return override
+    return get_configured_api_key()
+
+
+def stream_query_token_is_valid(provided_token: str | None) -> bool:
+    if not is_api_key_required():
+        return True
+    secret = get_effective_stream_query_secret()
+    candidate = (provided_token or "").strip()
+    if not secret or not candidate:
+        return False
+    return hmac.compare_digest(candidate, secret)
 
 
 def validate_api_key(provided_api_key: str | None) -> ApiKeyValidationResult:

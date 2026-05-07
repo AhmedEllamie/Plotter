@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: pen change start result
+- Success data: empty object `{}`; use **`message`** for the outcome
 
 ## Error Response
 - Error envelope:

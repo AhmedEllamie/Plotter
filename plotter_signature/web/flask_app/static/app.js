@@ -111,7 +111,7 @@ function formatDistanceMetersFromMm(mmValue) {
 }
 
 function renderStatusGui(status) {
-  const isConnected = Boolean(status.is_open);
+  const isConnected = Boolean(status.printer_connected ?? status.is_open);
   const isBusy = Boolean(status.is_busy ?? status.is_printing);
   const executionPercent = clampPercent(status.current_execution_percent);
   const remainingPenPercent = clampPercent(status.remaining_pen_percent);
@@ -120,7 +120,7 @@ function renderStatusGui(status) {
   setBadgeState(
     "statusConnectionBadge",
     isConnected ? "Connected" : "Disconnected",
-    isConnected ? "badge-ok" : "badge-neutral"
+    isConnected ? "badge-ok" : "badge-warn"
   );
   setBadgeState(
     "statusBusyBadge",

@@ -2,7 +2,7 @@
 
 This document consolidates all /api/* endpoint docs before API key enforcement.
 
-**Note:** Short paths here map to live Flask routes under **`/api/cmd/*`** and **`/api/config/*`** (see per-file `README.md`). **`GET /api/cmd/status`** payload omits **`port_name`**. Routes **upload**, **focus-adjust**, **capture/request**, and **requests** listings were removed; use multipart print, scanner direct APIs, **`CAPTURE_RESET_URL`**, and **`POST /api/config/auto-connect`** instead.
+**Note:** Short paths here map to live Flask routes under **`/api/cmd/*`** and **`/api/config/*`** (see per-file `README.md`). Public **`GET /api/cmd/status`** omits **`port_name`** / **`is_open`** and includes **`printer_connected`**. Routes **upload**, **focus-adjust**, **capture/request**, and **requests** listings were removed; use multipart print, scanner direct APIs, **`CAPTURE_RESET_URL`**, **`POST /api/config/auto-connect`**, and Desktop App / CLI serial where useful.
 
 ---
 
@@ -74,7 +74,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: defaultComPort, defaultBaudRate, captureResetConfigured, captureResetMethod, scannerServiceConfigured, scannerServiceBaseUrl
+- Success data: captureResetConfigured, captureResetMethod, scannerServiceConfigured, scannerServiceBaseUrl
 
 ## Error Response
 - Error envelope:
@@ -263,7 +263,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer status JSON **without `port_name`** (use AutoConnect/connect for port context)
+- Success data: printer status JSON **without `port_name` / `is_open`**; includes **`printer_connected`** (use AutoConnect/connect for port context)
 
 ## Error Response
 - Error envelope:
@@ -317,7 +317,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Delegates to /api/change-pen/start or /api/change-pen/finish response
+- Delegates to /api/change-pen/start or /api/change-pen/finish response (`data` is `{}` on success for those handlers)
 
 ## Error Response
 - Error envelope:
@@ -344,7 +344,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: pen change finish result
+- Success data: empty object `{}`; use **`message`**
 
 ## Error Response
 - Error envelope:
@@ -371,7 +371,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: pen change start result
+- Success data: empty object `{}`; use **`message`**
 
 ## Error Response
 - Error envelope:
@@ -399,7 +399,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer status after connection (`port_name` present here; omit from **`GET …/status`** JSON)
+- Success data: printer status after connection (`port_name` present here; omit **`port_name`/`is_open` from public `GET …/status`**; use **`printer_connected`**)
 
 ## Error Response
 - Error envelope:
@@ -561,7 +561,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: stats
+- Success data: **`data`** with **`maxPenDistanceM`** (full stats: **`GET /api/cmd/status`**)
 
 ## Error Response
 - Error envelope:
@@ -669,7 +669,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: printer void result
+- Success data (idle): empty object `{}`; use **`message`**. Busy cancel path unchanged (`data.status`).
 
 ## Error Response
 - Error envelope:
