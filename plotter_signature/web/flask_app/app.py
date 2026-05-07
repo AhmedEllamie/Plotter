@@ -26,7 +26,8 @@ from plotter_signature.dependency_injection import ServiceProvider, get_service_
 from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
-    is_api_key_required,
+    API_KEY_REQUIRED_MESSAGE,
+    get_configured_api_key,
     stream_query_token_is_valid,
     validate_api_key,
 )
@@ -394,6 +395,9 @@ def _save_ui_profile_data(file_path: Path, payload: dict[str, Any]) -> dict[str,
 
 
 def create_app(provider: ServiceProvider | None = None) -> Flask:
+    if not get_configured_api_key():
+        raise RuntimeError(API_KEY_REQUIRED_MESSAGE)
+
     provider = provider or get_service_provider()
     capture_settings = load_capture_settings()
     scanner_settings = load_scanner_service_settings()
@@ -562,9 +566,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not request.path.startswith("/api/"):
             return None
 
-        if not is_api_key_required():
-            return None
-
         header_api_key = (request.headers.get(API_KEY_HEADER) or "").strip()
         if request.method == "GET" and request.path.rstrip("/") == _SCANNER_STREAM_PATH.rstrip("/"):
             if validate_api_key(header_api_key).is_valid:
@@ -581,10 +582,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if validation.is_valid:
             return None
 
+        status_code = 500 if not validation.is_server_configured else 401
         return api_error(
             validation.message,
             error_code="UNAUTHORIZED",
-            status_code=401,
+            status_code=status_code,
         )
 
     def _merge_scanner_manual_config(payload: dict[str, Any]) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_ENV_VAR,
     API_KEY_HEADER,
+    API_KEY_REQUIRED_MESSAGE,
     STREAM_TOKEN_ENV_VAR,
     get_configured_api_key,
     get_effective_stream_query_secret,
@@ -12,6 +13,7 @@ from plotter_signature.infrastructure.security.api_key_auth import (
 __all__ = [
     "API_KEY_ENV_VAR",
     "API_KEY_HEADER",
+    "API_KEY_REQUIRED_MESSAGE",
     "STREAM_TOKEN_ENV_VAR",
     "get_configured_api_key",
     "get_effective_stream_query_secret",

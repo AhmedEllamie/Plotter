@@ -451,7 +451,7 @@ Capabilities include:
 `plotter_signature/desktop/pen_kiosk.py` (entry: `python -m plotter_signature.desktop.pen_kiosk`):
 
 - fullscreen Tkinter app
-- polls **`GET /api/cmd/status`** every 3s (with `X-API-Key` when required)
+- polls **`GET /api/cmd/status`** every 3s (with the mandatory `X-API-Key` header)
 - shows **API reachability** and **`printer_connected`** (serial is opened only by the Flask/server process; the kiosk does not use local USB connect/disconnect)
 - server URL + **Apply** (persisted locally as `api_base_url` only)
 - HTTP actions: PenDown / PenUp, max pen distance, reset cumulative distance
@@ -508,9 +508,10 @@ Intended for graphical user session; separate from Flask backend service.
 
 ## 16) Environment Variables
 
-### 16.1 Capture
+### 16.1 Authentication / Capture
 
-- `PLOTTER_API_KEY` (required shared inbound auth secret)
+- `PLOTTER_API_KEY` — **mandatory** shared inbound auth secret. Flask `create_app` and FastAPI `create_app` raise `RuntimeError` and refuse to start if it is missing or blank. There is no anonymous/dev bypass.
+- `PLOTTER_STREAM_TOKEN` — optional override for the `?token=` accepted by `GET /api/config/scanner/stream.mjpg`. When unset, the stream falls back to comparing the query token against `PLOTTER_API_KEY`.
 - `CAPTURE_RESET_URL`
 - `CAPTURE_RESET_TOKEN`
 - `CAPTURE_RESET_TIMEOUT_SECONDS` (float)
@@ -557,10 +558,11 @@ Operational implications:
 
 ## 18) Security and Operational Notes
 
-- Inbound API key authentication is required for:
+- Inbound API key authentication is **mandatory** for:
   - Flask: all `/api/*` endpoints (including `/api/cmd/*` and `/api/config/*`)
   - FastAPI: all `/printer/*` endpoints
-- Clients must send header `X-API-Key` with the same secret configured in `PLOTTER_API_KEY`.
+- Clients must send header `X-API-Key` with the same secret configured in `PLOTTER_API_KEY`. Missing/invalid keys return **HTTP 401**; if the server starts without `PLOTTER_API_KEY` set it refuses to boot at all.
+- The browser MJPEG endpoint `GET /api/config/scanner/stream.mjpg` additionally accepts a `?token=` query parameter that must match `PLOTTER_STREAM_TOKEN` (or `PLOTTER_API_KEY` when the override is unset). It does **not** accept anonymous viewers.
 - Scanner and capture integrations continue to support outbound bearer tokens.
 - Production deployment should be protected at network/proxy layer.
 - Services may run as root in provided templates; prefer least-privilege user where possible.

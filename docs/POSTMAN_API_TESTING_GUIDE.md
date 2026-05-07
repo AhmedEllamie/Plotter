@@ -18,16 +18,16 @@ All request URLs below are `{baseUrl}` + path (e.g. `{baseUrl}/api/cmd/health`).
 
 ### Authentication (`X-API-Key`)
 
-If the server sets **`PLOTTER_API_KEY`**, every `/api/*` request must send that value:
+**`PLOTTER_API_KEY` is mandatory.** The server refuses to start if it is unset or blank, so every `/api/*` request must send that value:
 
 - **Postman → Headers:** `X-API-Key` = your key  
 - **Or** Collection / Environment auth: type **API Key**, key name `X-API-Key`, value = server's key, add to **Header**.
 
-If **`PLOTTER_API_KEY`** is **unset or empty** on the server, you do **not** need this header.
+There is no anonymous / development bypass.
 
 **Scanner stream in a browser:** `GET /api/config/scanner/stream.mjpg` also accepts query **`token`** (must match **`PLOTTER_API_KEY`**, or **`PLOTTER_STREAM_TOKEN`** if set) because `<img src="...">` cannot send `X-API-Key`. The configuration page appends **`token`** from the saved API key. In Postman, keep sending **`X-API-Key`** on all requests.
 
-Invalid or missing key when required → **HTTP 401** and JSON:
+Invalid or missing key → **HTTP 401** and JSON:
 
 ```json
 {
@@ -170,7 +170,7 @@ python -m plotter_signature.cli disconnect
 
 | Method | Path | Params / body | Typical success |
 | ------ | ---- | ------------- | --------------- |
-| GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1); when `PLOTTER_API_KEY` is set, also `token` (same as main key, or `PLOTTER_STREAM_TOKEN` if set) **or** header `X-API-Key` | **200** MJPEG stream (binary) |
+| GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1); plus header `X-API-Key` **or** query `token` (must match `PLOTTER_STREAM_TOKEN` if set, otherwise `PLOTTER_API_KEY`) | **200** MJPEG stream (binary) |
 
 Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section. Scanner-related `errorCode` examples: `SCANNER_CONFIG_REQUIRED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, `SCANNER_CAPTURE_FAILED`, stream: `SCANNER_STREAM_*`.
 
@@ -220,7 +220,7 @@ Invalid integers → `INVALID_QUERY` (400).
 
 ## 13. Suggested Postman collection folder layout
 
-1. **Env:** `baseUrl`, optional `apiKey` → header `X-API-Key: {{apiKey}}` only when server uses auth.  
+1. **Env:** `baseUrl` and `apiKey` (required) → header `X-API-Key: {{apiKey}}` on every `/api/*` request.  
 2. **01 Health & config:** `GET health`, `GET config`, `GET ui-profile`.  
 3. **02 Status:** `GET status`.  
 4. **03 Print:** `POST print`, `POST print/bulk`, `POST bulk/stop`, `POST void`.  

@@ -12,7 +12,7 @@ Examples use:
 | Placeholder | Value                                                             |
 | ----------- | ----------------------------------------------------------------- |
 | Base URL    | `http://127.0.0.1:5000`                                           |
-| API key for examples | Configure the same key in browser **Configuration → API Key** only when `PLOTTER_API_KEY` is set on the server. |
+| API key for examples | Configure the same key in browser **Configuration → API Key**; `PLOTTER_API_KEY` is mandatory on the server. |
 
 
 All JSON success bodies wrap payloads in the [standard envelope](#global-envelope-auth-http-status) (`success`, `message`, `data`, `errorCode`, `details`). Field order in JSON may vary.
@@ -71,14 +71,14 @@ HTTP status: `401`.
 
 | Location    | Name               | Type     | Required    | Description                                                                                                                                       |
 | ----------- | ------------------ | -------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HTTP header | `X-API-Key`        | `string` | When `PLOTTER_API_KEY` is set | Must match server key or request returns **401** (all routes). |
-| Query       | `token`            | `string` | Alternative (**only** `GET /api/config/scanner/stream.mjpg`) | When `PLOTTER_API_KEY` is set, must equal **`PLOTTER_STREAM_TOKEN`** if that env is non-empty, otherwise **`PLOTTER_API_KEY`**. Lets the configuration page use `<img src="...">`, which cannot send headers. **May appear in logs/referrers.** |
+| HTTP header | `X-API-Key`        | `string` | **Yes** for every `/api/*` route | Must match server `PLOTTER_API_KEY` or request returns **401**. |
+| Query       | `token`            | `string` | Alternative (**only** `GET /api/config/scanner/stream.mjpg`) | Must equal **`PLOTTER_STREAM_TOKEN`** if that env is non-empty, otherwise **`PLOTTER_API_KEY`**. Lets the configuration page use `<img src="...">`, which cannot send headers. **May appear in logs/referrers.** |
 
 
-When **`PLOTTER_API_KEY` is unset or empty** on the server, API key authentication is **disabled** and requests **do not** need `X-API-Key` or stream `token`.
+**`PLOTTER_API_KEY` is mandatory.** Flask `create_app` and FastAPI `create_app` raise `RuntimeError` and refuse to start if the variable is missing or blank. There is no anonymous / development bypass.
 
 
-When **`PLOTTER_API_KEY` is set**, **all** `/api/*` routes require a matching **`X-API-Key`** header, **except** the scanner stream may use the **`token`** query parameter as described above (missing or invalid → **401**).
+All `/api/*` routes require a matching **`X-API-Key`** header, **except** the scanner stream which may also use the **`token`** query parameter as described above (missing or invalid → **401**).
 
 
 | `errorCode`           | HTTP | Meaning               |
@@ -88,10 +88,9 @@ When **`PLOTTER_API_KEY` is set**, **all** `/api/*` routes require a matching **
 
 ### Changing the server API key
 
-1. On the plotter host, set or update **`PLOTTER_API_KEY`** in the environment (or in the systemd override / `.env` file used at service start).
+1. On the plotter host, set or update **`PLOTTER_API_KEY`** in the environment (or in the systemd override / `.env` file used at service start). The server will refuse to start if this is unset or blank.
 2. **Restart** the Flask (or FastAPI) process so the new value loads.
 3. Update every client (**Configuration page saved API Key**, kiosk env / key file if used, integrations) so they send the same value in **`X-API-Key`**. For the scanner MJPEG URL in the browser, either send **`X-API-Key`** (e.g. from scripted clients) or use query **`token`** as documented for `stream.mjpg`. Optional: set **`PLOTTER_STREAM_TOKEN`** to a separate secret and use that value only in the stream URL query (still send **`PLOTTER_API_KEY`** on `fetch` requests).
-4. Omit `PLOTTER_API_KEY` entirely on the server if you want authentication **disabled** (open LAN installs only).
 
 
 ### Static HTML (no API key)
@@ -570,7 +569,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
 
 ## Group: Config APIs (`/api/config/*`)
 
-Header: `**X-API-Key**`: `string` (required when `PLOTTER_API_KEY` is set, except scanner stream may use query `token` as documented).
+Header: `**X-API-Key**`: `string` (required on every route, except the scanner stream may use query `token` as documented).
 
 ---
 
@@ -762,7 +761,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-max-distance" \
 
 #### `GET /api/config/scanner/stream.mjpg`
 
-When **`PLOTTER_API_KEY`** is set, send **`X-API-Key`** **or** set query **`token`** to **`PLOTTER_API_KEY`** (or to **`PLOTTER_STREAM_TOKEN`** when that env is set). The configuration page adds **`token`** from the saved API key for `<img>` previews.
+Send **`X-API-Key`** **or** set query **`token`** to **`PLOTTER_API_KEY`** (or to **`PLOTTER_STREAM_TOKEN`** when that env is set). The configuration page adds **`token`** from the saved API key for `<img>` previews. Anonymous viewers are rejected with **401**.
 
 **Example request**
 
@@ -977,7 +976,7 @@ Public API status omits serial **`port_name`**. The **`GET /api/cmd/status`** re
 
 ## API index (endpoints in this document)
 
-Quick checklist of every HTTP surface **documented above** (method + path). All `/api/`* routes require **[`X-API-Key`](#authentication-all-api-routes)** when **`PLOTTER_API_KEY`** is set, except **`GET /api/config/scanner/stream.mjpg`** may use query **`token`** as documented there.
+Quick checklist of every HTTP surface **documented above** (method + path). All `/api/`* routes require **[`X-API-Key`](#authentication-all-api-routes)**, except **`GET /api/config/scanner/stream.mjpg`** which may use query **`token`** as documented there.
 
 ### Static pages (no API key)
 

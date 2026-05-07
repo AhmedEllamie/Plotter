@@ -43,7 +43,7 @@ sudo nano /etc/plotter-signature/plotter-signature.env
 
 At minimum set:
 
-- `PLOTTER_API_KEY` to a long random shared secret **when you want API authentication**. When unset or blank, **`/api/*` does not require** `X-API-Key` (fine for isolated networks). Changing the key after deployment: edit the env file, `sudo systemctl restart plotter-signature-flask`, then update browsers/kiosk/integration clients.
+- `PLOTTER_API_KEY` to a long random shared secret. **This variable is mandatory** — the Flask service refuses to start (`RuntimeError`) if it is unset or blank, and every `/api/*` request must send the matching value as `X-API-Key`. Changing the key after deployment: edit the env file, `sudo systemctl restart plotter-signature-flask`, then update browsers/kiosk/integration clients.
 - `CAPTURE_RESET_URL` to your reset endpoint.
 - Optional `PLOTTER_SERIAL_DEVICE_MATCH` to a stable USB serial identifier for the plotter, such as `CH340`, `CP210x`, or `VID:PID=1A86:7523`.
 

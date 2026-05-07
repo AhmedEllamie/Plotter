@@ -16,7 +16,7 @@ from plotter_signature.domain.contracts import (
     get_paper_size_mm,
     parse_paper,
 )
-from plotter_signature.infrastructure.security.api_key_auth import is_api_key_required, validate_api_key
+from plotter_signature.infrastructure.security.api_key_auth import validate_api_key
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 
 
@@ -109,12 +109,11 @@ def _parse_print_with_approval_request(raw_json: str) -> PrintWithApprovalReques
 
 
 def _require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
-    if not is_api_key_required():
-        return
     validation = validate_api_key(x_api_key)
     if validation.is_valid:
         return
-    raise HTTPException(status_code=401, detail=validation.message)
+    status_code = 500 if not validation.is_server_configured else 401
+    raise HTTPException(status_code=status_code, detail=validation.message)
 
 
 def create_printer_router(provider: ServiceProvider | None = None) -> APIRouter:
