@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 from pathlib import Path
 from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
@@ -32,13 +33,41 @@ def _load_kiosk_settings() -> dict[str, str]:
     return {"api_base_url": val.strip()} if isinstance(val, str) else {}
 
 
-def _save_kiosk_settings(api_base_url: str) -> None:
-    path = _kiosk_settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"api_base_url": api_base_url.strip().rstrip("/")}, indent=2),
-        encoding="utf-8",
-    )
+def _local_ipv4s_for_display() -> str:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            ip = probe.getsockname()[0]
+            if ip and ip not in seen:
+                seen.add(ip)
+                ordered.append(ip)
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET, type=socket.SOCK_DGRAM):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in seen:
+                seen.add(ip)
+                ordered.append(ip)
+    except OSError:
+        pass
+    if not ordered:
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+            if ip and ip != "127.0.0.1" and ip not in seen:
+                ordered.append(ip)
+        except OSError:
+            pass
+    if not ordered:
+        return "Unavailable"
+    return ", ".join(ordered)
 
 
 def _read_plotter_api_key_from_file(path: str) -> str:
@@ -73,7 +102,7 @@ class PenKioskApp:
         self._http_ok = False
         self._plotter_connected = False
 
-        self._server_url_var = StringVar(value=self._api_base_url)
+        self._current_ip_var = StringVar(value="Resolving…")
         self._link_detail_var = StringVar(value="Checking…")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
@@ -162,35 +191,20 @@ class PenKioskApp:
 
         Label(
             parent,
-            text="Plotter server URL (Flask / plotter-signature)",
+            text="Current IP (this machine)",
             bg="#111827",
             fg="#94a3b8",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w")
-        server_row = Frame(parent, bg="#111827")
-        server_row.pack(fill=X, pady=(2, 6))
-        Entry(
-            server_row,
-            textvariable=self._server_url_var,
-            font=("Segoe UI", 13),
-            bg="#0b1220",
+        Label(
+            parent,
+            textvariable=self._current_ip_var,
+            bg="#111827",
             fg="#f8fafc",
-            insertbackground="#f8fafc",
-            relief="flat",
-        ).pack(side=LEFT, fill=X, expand=True, ipady=6, padx=(0, 8))
-        Button(
-            server_row,
-            text="Apply",
-            command=self._apply_server_url,
-            bg="#334155",
-            fg="#ffffff",
-            activeforeground="#ffffff",
-            relief="flat",
-            padx=16,
-            pady=8,
-            font=("Segoe UI", 12, "bold"),
-            cursor="hand2",
-        ).pack(side=RIGHT)
+            font=("Segoe UI", 13, "bold"),
+            justify="left",
+            wraplength=720,
+        ).pack(anchor="w", pady=(2, 6))
 
         link_row = Frame(parent, bg="#111827")
         link_row.pack(fill=X, pady=(10, 12))
@@ -413,19 +427,6 @@ class PenKioskApp:
             pc = "connected" if self._plotter_connected else "disconnected"
         self._link_detail_var.set(f"API: {http} | Serial on server: {pc}")
 
-    def _apply_server_url(self) -> None:
-        raw = self._server_url_var.get().strip()
-        if not raw:
-            self._append_feedback("Enter a plotter server URL (e.g. http://192.168.1.5:5001).", is_error=True)
-            return
-        if not raw.lower().startswith(("http://", "https://")):
-            raw = f"http://{raw}"
-        self._api_base_url = raw.rstrip("/")
-        self._server_url_var.set(self._api_base_url)
-        _save_kiosk_settings(self._api_base_url)
-        self._append_feedback("Server URL applied.")
-        self._refresh_status_now()
-
     def _refresh_status_now(self) -> None:
         try:
             status = self._api_get("/api/cmd/status")
@@ -481,6 +482,7 @@ class PenKioskApp:
             self._append_feedback(f"Status error: {ex}", is_error=True)
 
         self._update_link_detail_line()
+        self._current_ip_var.set(_local_ipv4s_for_display())
 
     def _request_headers(self, *, json_body: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {}
