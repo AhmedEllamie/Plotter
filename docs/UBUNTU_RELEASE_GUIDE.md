@@ -31,6 +31,8 @@ cd /opt/plotter-signature
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+# Critical: bind the venv to this checkout so `python -m plotter_signature` runs THIS tree (not an old wheel in site-packages).
+pip install -e .
 ```
 
 ## 3) Create runtime environment file
@@ -122,6 +124,17 @@ Common checks:
   - verify `CAPTURE_RESET_URL` and connectivity.
 - Scanner endpoints fail:
   - verify scanner base URL/token in env file.
+- **`git pull` shows new commits but APIs still behave like the old build** (for example `/api/*` returns **200** without `X-API-Key` when the new code should return **401**):
+  - systemd runs `python -m plotter_signature`, which loads **`plotter_signature` from the virtualenv**. If you only ever ran `pip install .` once, the **installed copy** can stay old while `git log` on disk is new.
+  - **Fix:** `source .venv/bin/activate` then `pip install -e .` (or `pip install --upgrade .`) from the repo root, then `sudo systemctl restart plotter-signature-flask`.
+  - **Confirm which code is running:**
+
+    ```bash
+    /opt/Automated_Signature/plotter-signature/.venv/bin/python -c \
+      "import plotter_signature; print(plotter_signature.__file__)"
+    ```
+
+    You want a path **inside your clone** (editable install), not only `.../site-packages/plotter_signature/...` from an old snapshot.
 - Printer connect fails:
   - verify `/dev/ttyUSB0` or `/dev/ttyACM0`.
   - verify user/group has `dialout`.
@@ -140,10 +153,11 @@ The example Flask unit ships **`User=root`** (root bypasses `dialout`), but prod
 ## 8) Update deployment (new release)
 
 ```bash
-cd /opt/plotter-signature
+cd /opt/plotter-signature   # or /opt/Automated_Signature/plotter-signature
 git pull
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 sudo systemctl restart plotter-signature-flask
 ```
 
