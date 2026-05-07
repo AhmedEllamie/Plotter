@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="210mm"
+     height="297mm"
+     viewBox="0 0 210 297">
+  <!-- A4 page; units in mm. Cross intersection at (50, 50) = 5 cm from left edge, 5 cm from top edge. -->
+  <g fill="none" stroke="#000000" stroke-width="0.5" stroke-linecap="round">
+    <!-- Horizontal arm through center -->
+    <line x1="35" y1="50" x2="65" y2="50"/>
+    <!-- Vertical arm through center -->
+    <line x1="50" y1="35" x2="50" y2="65"/>
+  </g>
+</svg>

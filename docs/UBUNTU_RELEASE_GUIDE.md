@@ -43,8 +43,10 @@ sudo nano /etc/plotter-signature/plotter-signature.env
 
 At minimum set:
 
-- `PLOTTER_API_KEY` to a long random shared secret (required for all `/api/*` and `/printer/*` calls).
+- `PLOTTER_API_KEY` to a long random shared secret **when you want API authentication**. When unset or blank, **`/api/*` does not require** `X-API-Key` (fine for isolated networks). Changing the key after deployment: edit the env file, `sudo systemctl restart plotter-signature-flask`, then update browsers/kiosk/integration clients.
 - `CAPTURE_RESET_URL` to your reset endpoint.
+
+Unless you are on a machine **without** USB serial hardware (or CI), rely on the default: **AutoConnect runs once** when Flask/FastAPI start (same as `POST /api/config/auto-connect` with `{}`; failures are logged and the service still listens). To **disable** that probing, set **`AUTO_CONNECT_ON_STARTUP`** to `0`, `false`, `no`, or `off`.
 
 If scanner integration is used, also set:
 

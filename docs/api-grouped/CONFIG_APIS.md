@@ -54,19 +54,20 @@ Check selected port before connect.
 - `SERIAL_DEVICE_REQUIRED` (400)
 - `SERIAL_DEVICE_INVALID` (400)
 
-## `POST /api/config/connect`
+## `POST /api/config/auto-connect`
 ### Description
-Opens printer serial connection.
+Opens printer serial connection using **AutoConnect** (optional explicit `comPort`, else default + enumerated ports). Flask and FastAPI also run **the same resolver once at process startup** by default (**`AUTO_CONNECT_ON_STARTUP`** can be `0` / `false` / `no` / `off` to disable).
 ### How to use
-Send optional `comPort` and `baudRate` then connect.
+Send optional `comPort` / `baudRate`, or `{}` for discovery.
 ### What it takes
 - JSON body optional.
-- Requires `X-API-Key`.
+- Requires `X-API-Key` when `PLOTTER_API_KEY` is set on the server.
 ### Response
 - Printer status model after connect.
 ### Error codes
 - `ALREADY_CONNECTED` (409)
 - `INVALID_BAUD_RATE` (400)
+- `AUTO_CONNECT_FAILED` (400)
 - `CONNECT_FAILED` (400)
 
 ## `POST /api/config/disconnect`
@@ -81,20 +82,6 @@ Call from config UI disconnect action.
 ### Error codes
 - `NOT_CONNECTED` (409)
 - `PRINTER_BUSY` (409)
-
-## `POST /api/config/upload`
-### Description
-Uploads/stores SVG for later print commands.
-### How to use
-Multipart upload with key `svg` (or `file`).
-### What it takes
-- Multipart file payload.
-- Requires `X-API-Key`.
-### Response
-- `fileName`, `sizeBytes`, `uploadedAt`.
-### Error codes
-- `SVG_REQUIRED` (400)
-- `EMPTY_SVG` (400)
 
 ## `POST /api/config/change-pen/start`
 ## `POST /api/config/change-pen/finish`
@@ -118,12 +105,12 @@ Pen change control endpoints (`start`, `finish`, or mode-based dispatcher).
 ### Description
 Resets distance stats and optional max pen distance update.
 ### How to use
-Send optional `maxPenDistanceM`, `clearUploadedSvg`.
+Send optional `maxPenDistanceM`.
 ### What it takes
 - JSON body optional.
-- Requires `X-API-Key`.
+- Requires `X-API-Key` when server auth is enabled.
 ### Response
-- `stats`, `clearedUploadedSvg`.
+- `stats`.
 ### Error codes
 - `PRINTER_BUSY` (409)
 - `RESET_VALIDATION_ERROR` (400)
@@ -169,22 +156,6 @@ Send autofocus/manual focus (and optional quad points).
 - Requires `X-API-Key`.
 ### Response
 - Scanner config apply result.
-### Error codes
-- `SCANNER_CONFIG_REQUIRED` (400)
-- `SCANNER_HTTP_ERROR` (502)
-- `SCANNER_UNREACHABLE` (502)
-- `SCANNER_CONFIG_FAILED` (500)
-
-## `POST /api/config/scanner/focus-adjust`
-### Description
-Sends incremental focus adjustment.
-### How to use
-Send direction/step payload.
-### What it takes
-- JSON payload required.
-- Requires `X-API-Key`.
-### Response
-- Scanner focus adjust result.
 ### Error codes
 - `SCANNER_CONFIG_REQUIRED` (400)
 - `SCANNER_HTTP_ERROR` (502)

@@ -135,6 +135,7 @@ class PrintResponse:
 class PrinterStatus:
     is_open: bool = False
     port_name: str = "N/A"
+    is_busy: bool = False
     is_printing: bool = False
     bulk_requested_total: int = 0
     bulk_printed_count: int = 0

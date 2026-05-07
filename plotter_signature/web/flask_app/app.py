@@ -20,24 +20,21 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
-from flask import Flask, Response, g, request, send_file, send_from_directory
+from flask import Flask, Response, request, send_file, send_from_directory
 
 from plotter_signature.dependency_injection import ServiceProvider, get_service_provider
 from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
-    get_configured_api_key,
+    is_api_key_required,
+    stream_query_token_is_valid,
     validate_api_key,
 )
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
-from plotter_signature.web.flask_app.config import (
-    FlaskCaptureSettings,
-    ScannerServiceSettings,
-    load_capture_settings,
-    load_scanner_service_settings,
-)
+from plotter_signature.web.flask_app.config import ScannerServiceSettings, load_capture_settings, load_scanner_service_settings
 from plotter_signature.web.flask_app.response import api_error, api_success
 from plotter_signature.web.flask_app.state import RuntimeState
+from plotter_signature.web.startup_serial import run_startup_autoconnect
 
 
 def _run_async(coroutine: Any) -> Any:
@@ -60,13 +57,39 @@ def _parse_optional_int(value: Any) -> int | None:
 
 
 def _ensure_connected(provider: ServiceProvider) -> None:
-    if not provider.printer_service.is_open:
-        raise RuntimeError("Printer is not connected. Call POST /api/config/connect first.")
+    try:
+        provider.printer_service.ensure_serial_ready()
+    except RuntimeError as ex:
+        raise RuntimeError(
+            "Printer is not connected. Ensure the server process has opened the serial port "
+            "(startup autoconnect / deployment configuration)."
+        ) from ex
 
 
 def _ensure_not_busy(provider: ServiceProvider) -> None:
-    if provider.printer_service.is_printing:
+    if provider.printer_service.is_busy:
         raise RuntimeError("Printer is busy.")
+
+
+def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
+    payload = asdict(provider.printer_service.get_status())
+    payload.pop("port_name", None)
+    payload.pop("is_open", None)
+    payload["printer_connected"] = provider.printer_service.is_open
+    return payload
+
+
+def _capture_profile_to_scanner_session_payload(capture: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Build scanner session body from a sanitized capture dict. Second value: require quad points list."""
+    payload: dict[str, Any] = {
+        "autofocus_enabled": bool(capture.get("autofocus_enabled", False)),
+        "manual_focus_value": float(capture.get("manual_focus_value", 35)),
+    }
+    quad_points = capture.get("quad_points")
+    if isinstance(quad_points, list) and len(quad_points) == 4:
+        payload["quad_points"] = quad_points
+        return payload, True
+    return payload, False
 
 
 def _build_print_request(payload: dict[str, Any] | None) -> PrintRequest:
@@ -151,36 +174,6 @@ class _QueuedPrintJob:
     svg_file_name: str
     print_request_dict: dict[str, Any]
     copies: int
-
-
-def _trigger_capture_reset(settings: FlaskCaptureSettings, payload: dict[str, Any]) -> dict[str, Any]:
-    if not settings.is_configured:
-        raise RuntimeError("Capture reset URL is not configured.")
-
-    request_payload = {
-        "action": "capture_reset",
-        "requestedAt": datetime.now(timezone.utc).isoformat(),
-    }
-    request_payload.update(payload)
-    body = json.dumps(request_payload).encode("utf-8")
-
-    headers = {"Content-Type": "application/json"}
-    if settings.reset_token:
-        headers["Authorization"] = f"Bearer {settings.reset_token}"
-
-    request_obj = Request(
-        url=settings.reset_url,
-        data=body if settings.reset_method != "GET" else None,
-        method=settings.reset_method,
-        headers=headers,
-    )
-
-    with urlopen(request_obj, timeout=settings.reset_timeout_seconds) as response:
-        raw_body = response.read().decode("utf-8", errors="ignore")
-        return {
-            "statusCode": response.getcode(),
-            "responseBody": raw_body[:4000],
-        }
 
 
 def _extract_capture_image_payload() -> tuple[str, str, bytes]:
@@ -406,13 +399,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     scanner_settings = load_scanner_service_settings()
     runtime_state = RuntimeState()
     last_scanner_manual_config: dict[str, Any] = {}
-    capture_jobs_lock = threading.Lock()
-    capture_jobs: dict[str, dict[str, Any]] = {}
     ui_profile_lock = threading.Lock()
     ui_profile_path = _default_ui_profile_path()
     ui_profile_exists = ui_profile_path.exists()
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
-    api_auth_cookie_name = "plotter_api_auth"
+    _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -436,9 +427,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     active_history_job_holder: dict[str, UUID | None] = {"id": None}
 
     def _apply_print_stop_side_effects() -> dict[str, Any]:
-        st = provider.printer_service.get_status()
         jid = active_history_job_holder.get("id")
         if jid:
+            st = provider.printer_service.get_status()
             provider.print_history_store.update_completed(
                 jid,
                 status="stopped",
@@ -447,7 +438,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 result_json={"printerStatus": asdict(st)},
             )
         runtime_state.clear_uploaded_svg()
-        return {"status": asdict(st)}
+        return {"jobStopped": True}
 
     def _execute_queued_job(job: _QueuedPrintJob) -> dict[str, Any]:
         active_history_job_holder["id"] = job.job_id
@@ -457,7 +448,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             gcode = _convert_svg(job.svg_payload, print_request)
             if job.kind == "bulk":
                 print_result = _run_async(provider.printer_service.bulk_print(gcode, job.copies))
-                st = provider.printer_service.get_status()
                 copies_printed = int(print_result.copies or 0)
                 final_status = "stopped" if copies_printed < job.copies else "completed"
                 data = {
@@ -470,18 +460,15 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                         "printedCount": copies_printed,
                         "stopRequested": final_status == "stopped",
                     },
-                    "status": asdict(st),
                 }
             else:
                 print_result = _run_async(provider.printer_service.print(gcode))
-                st = provider.printer_service.get_status()
                 final_status = "stopped" if print_result.job_stopped else "completed"
                 copies_printed = 0 if print_result.job_stopped else 1
                 data = {
                     "svgFileName": job.svg_file_name,
                     "commandCount": len(gcode),
                     "result": asdict(print_result),
-                    "status": asdict(st),
                 }
             provider.print_history_store.update_completed(
                 job.job_id,
@@ -575,43 +562,30 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not request.path.startswith("/api/"):
             return None
 
-        header_api_key = (request.headers.get(API_KEY_HEADER) or "").strip()
-        cookie_api_key = (request.cookies.get(api_auth_cookie_name) or "").strip()
-        provided_api_key = header_api_key or cookie_api_key
-        validation = validate_api_key(provided_api_key)
-        if validation.is_valid:
-            # If a request came with a valid header key, persist auth for browser subresource
-            # requests (like <img src="/api/config/scanner/stream.mjpg">) that cannot send
-            # custom headers.
-            g.issue_api_auth_cookie = bool(header_api_key)
+        if not is_api_key_required():
             return None
 
-        if not validation.is_server_configured:
+        header_api_key = (request.headers.get(API_KEY_HEADER) or "").strip()
+        if request.method == "GET" and request.path.rstrip("/") == _SCANNER_STREAM_PATH.rstrip("/"):
+            if validate_api_key(header_api_key).is_valid:
+                return None
+            if stream_query_token_is_valid(request.args.get("token")):
+                return None
             return api_error(
-                validation.message,
-                error_code="AUTH_NOT_CONFIGURED",
-                status_code=503,
+                f"Missing or invalid {API_KEY_HEADER} header or token query parameter.",
+                error_code="UNAUTHORIZED",
+                status_code=401,
             )
+
+        validation = validate_api_key(header_api_key)
+        if validation.is_valid:
+            return None
 
         return api_error(
             validation.message,
             error_code="UNAUTHORIZED",
             status_code=401,
         )
-
-    @app.after_request
-    def issue_api_auth_cookie(response: Response) -> Response:
-        if bool(getattr(g, "issue_api_auth_cookie", False)):
-            response.set_cookie(
-                key=api_auth_cookie_name,
-                value=get_configured_api_key(),
-                max_age=60 * 60 * 24 * 7,
-                httponly=True,
-                samesite="Lax",
-                secure=False,
-                path="/",
-            )
-        return response
 
     def _merge_scanner_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
         merged = dict(payload)
@@ -624,7 +598,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return merged
 
     def _remember_scanner_manual_config(payload: dict[str, Any], scanner_response: dict[str, Any]) -> None:
-        source = scanner_response.get("manual_config")
+        qp_block = scanner_response.get("quad_points")
+        if isinstance(qp_block, dict) and isinstance(qp_block.get("manual_config"), dict):
+            source = qp_block["manual_config"]
+        else:
+            source = scanner_response.get("manual_config")
         if not isinstance(source, dict):
             source = payload
         for key in ("autofocus_enabled", "manual_focus_value", "quad_points", "frame_width", "frame_height"):
@@ -716,119 +694,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     _bootstrap_scanner_config_from_profile()
 
-    def _capture_job_snapshot(job_id: str) -> dict[str, Any]:
-        with capture_jobs_lock:
-            raw = capture_jobs.get(job_id)
-            if raw is None:
-                raise KeyError(job_id)
-            return dict(raw)
-
-    def _capture_job_update(job_id: str, **updates: Any) -> None:
-        with capture_jobs_lock:
-            job = capture_jobs.get(job_id)
-            if job is None:
-                return
-            job.update(updates)
-
-    def _run_capture_job(job_id: str, readability_required: bool, timeout_seconds: int) -> None:
-        _capture_job_update(job_id, state="running", startedAt=datetime.now(timezone.utc).isoformat())
-        try:
-            _, start_capture_response = _scanner_request_json(
-                scanner_settings,
-                "/capture/start",
-                method="POST",
-                body={
-                    "readability_required": bool(readability_required),
-                    "timeout_seconds": int(timeout_seconds),
-                },
-            )
-            if start_capture_response.get("ok") is False:
-                raise RuntimeError(start_capture_response.get("message") or "Scanner capture start failed.")
-            capture = start_capture_response.get("capture") or {}
-            capture_id = str(capture.get("capture_id") or capture.get("job_id") or "").strip()
-            if not capture_id:
-                raise RuntimeError("Scanner capture id was not returned.")
-            _capture_job_update(job_id, captureId=capture_id, scannerStatus="started")
-
-            max_attempts = max(1, scanner_settings.job_poll_max_attempts)
-            interval_seconds = max(0.05, float(scanner_settings.job_poll_interval_seconds))
-            latest_capture = capture
-            for attempt in range(max_attempts):
-                _, capture_status_response = _scanner_request_json(
-                    scanner_settings,
-                    f"/capture/{capture_id}/status",
-                    method="GET",
-                )
-                latest_capture = capture_status_response.get("capture") or {}
-                scanner_status = str(latest_capture.get("status") or "").strip().lower()
-                _capture_job_update(
-                    job_id,
-                    scannerStatus=scanner_status or "unknown",
-                    attempts=attempt + 1,
-                )
-                if scanner_status in {"succeeded", "failed"}:
-                    break
-                time.sleep(interval_seconds)
-
-            final_status = str(latest_capture.get("status") or "").strip().lower()
-            if final_status != "succeeded":
-                if final_status not in {"failed"}:
-                    _capture_job_update(
-                        job_id,
-                        state="timeout",
-                        completedAt=datetime.now(timezone.utc).isoformat(),
-                        error="Capture status polling timed out.",
-                    )
-                    return
-                raise RuntimeError(
-                    f"Scanner capture failed: {latest_capture.get('error') or 'unknown_error'} - "
-                    f"{latest_capture.get('detail') or 'no detail'}."
-                )
-
-            _, content_type, image_payload = _scanner_request_bytes(scanner_settings, f"/capture/{capture_id}/result")
-            if not image_payload:
-                raise RuntimeError("Scanner returned an empty rectified image.")
-            model = runtime_state.set_captured_image(
-                file_name=f"rectified-{capture_id}.png",
-                content_type=content_type,
-                content=image_payload,
-            )
-            _capture_job_update(
-                job_id,
-                state="succeeded",
-                completedAt=datetime.now(timezone.utc).isoformat(),
-                fileName=model.file_name,
-                contentType=model.content_type,
-                capturedAt=_to_iso8601_utc(model.captured_at),
-                imageUrl="/api/config/capture/latest/image",
-            )
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            _capture_job_update(
-                job_id,
-                state="failed",
-                completedAt=datetime.now(timezone.utc).isoformat(),
-                error=f"Scanner request failed with HTTP {ex.code}.",
-                errorCode="SCANNER_HTTP_ERROR",
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            _capture_job_update(
-                job_id,
-                state="failed",
-                completedAt=datetime.now(timezone.utc).isoformat(),
-                error=f"Failed to reach scanner service: {ex}",
-                errorCode="SCANNER_UNREACHABLE",
-            )
-        except Exception as ex:
-            _capture_job_update(
-                job_id,
-                state="failed",
-                completedAt=datetime.now(timezone.utc).isoformat(),
-                error=str(ex),
-                errorCode="SCANNER_CAPTURE_FAILED",
-            )
-
     @app.get("/")
     def home() -> Response:
         if not app.static_folder:
@@ -847,7 +712,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Service is healthy.",
             data={
                 "printerConnected": provider.printer_service.is_open,
-                "printerBusy": provider.printer_service.is_printing,
+                "printerBusy": provider.printer_service.is_busy,
                 "captureResetConfigured": capture_settings.is_configured,
             },
         )
@@ -857,8 +722,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return api_success(
             message="Runtime config loaded.",
             data={
-                "defaultComPort": provider.printer_service.default_com_port,
-                "defaultBaudRate": provider.printer_service.default_baud_rate,
                 "captureResetConfigured": capture_settings.is_configured,
                 "captureResetMethod": capture_settings.reset_method,
                 "scannerServiceConfigured": scanner_settings.is_configured,
@@ -884,6 +747,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 error_code="UI_PROFILE_SAVE_FAILED",
                 status_code=500,
             )
+        scanner_warning: str | None = None
         with ui_profile_lock:
             ui_profile_data.clear()
             ui_profile_data.update(saved_profile)
@@ -898,7 +762,25 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                         last_scanner_manual_config["manual_focus_value"] = float(saved_capture.get("manual_focus_value"))
                     except (TypeError, ValueError):
                         pass
-            return api_success(message="UI profile saved.", data=dict(ui_profile_data))
+
+            if scanner_settings.is_configured and isinstance(saved_capture, dict):
+                session_payload, require_quad = _capture_profile_to_scanner_session_payload(saved_capture)
+                try:
+                    scanner_response = _apply_scanner_session_config(session_payload, require_quad_points=require_quad)
+                    if scanner_response.get("ok") is False:
+                        raise RuntimeError(scanner_response.get("message") or "Scanner session apply failed.")
+                    _remember_scanner_manual_config(session_payload, scanner_response)
+                except Exception as ex:
+                    scanner_warning = str(ex)
+                    app.logger.warning("Scanner apply after UI profile save failed: %s", ex)
+
+        data_out = dict(ui_profile_data)
+        if scanner_warning:
+            data_out["scannerApplyWarning"] = scanner_warning
+        message = "UI profile saved."
+        if scanner_warning:
+            message = f"{message} Scanner apply failed: {scanner_warning}"
+        return api_success(message=message, data=data_out)
 
     @app.get("/api/config/scanner/stream.mjpg")
     def scanner_stream_proxy() -> Response | tuple[Response, int]:
@@ -935,377 +817,289 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             direct_passthrough=True,
         )
 
-    @app.post("/api/config/scanner/manual-config")
-    def scanner_manual_config() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        if not payload:
-            return api_error("Manual config payload is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            manual_config_response = _apply_scanner_session_config(payload, require_quad_points=False)
-            if manual_config_response.get("ok") is False:
-                raise RuntimeError(manual_config_response.get("message") or "Scanner manual config failed.")
-            _remember_scanner_manual_config(payload, manual_config_response)
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner manual config failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Manual config failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
-        return api_success("Scanner manual config applied.", data=manual_config_response)
+    def _register_redundant_scanner_capture_http() -> None:
+        """
+        Optional routes: POST .../capture/start, GET .../capture/<id>/{status,result},
+        POST .../capture/run, GET .../capture/run/<job_id>.
+        Intentionally never called — supported path is stream + POST .../capture/oneshot.
+        Invoke this from create_app to re-enable the old HTTP surface.
+        """
+        capture_jobs_lock = threading.Lock()
+        capture_jobs: dict[str, dict[str, Any]] = {}
 
-    @app.post("/api/config/scanner/focus-adjust")
-    def scanner_focus_adjust() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        if not payload:
-            return api_error("Focus adjust payload is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            _, adjust_response = _scanner_request_json(
-                scanner_settings,
-                "/session/focus-adjust",
-                method="POST",
-                body=payload,
-            )
-            if adjust_response.get("ok") is False:
-                raise RuntimeError(adjust_response.get("message") or "Scanner focus adjust failed.")
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner focus adjust failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Focus adjust failed: {ex}", error_code="SCANNER_CONFIG_FAILED", status_code=500)
-        return api_success("Scanner focus adjusted.", data=adjust_response)
+        def _capture_job_snapshot(job_id: str) -> dict[str, Any]:
+            with capture_jobs_lock:
+                raw = capture_jobs.get(job_id)
+                if raw is None:
+                    raise KeyError(job_id)
+                return dict(raw)
 
-    @app.post("/api/config/scanner/capture/start")
-    def scanner_capture_start() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        request_payload = {
-            "readability_required": bool(payload.get("readability_required", True)),
-            "timeout_seconds": int(payload.get("timeout_seconds", 15)),
-        }
-        try:
-            _, start_capture_response = _scanner_request_json(
-                scanner_settings,
-                "/capture/start",
-                method="POST",
-                body=request_payload,
-            )
-            if start_capture_response.get("ok") is False:
-                raise RuntimeError(start_capture_response.get("message") or "Scanner capture start failed.")
-            capture = start_capture_response.get("capture") or {}
-            capture_id = str(capture.get("capture_id") or capture.get("job_id") or "").strip()
-            if not capture_id:
-                raise RuntimeError("Scanner capture id was not returned.")
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner capture start failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Capture start failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
-        return api_success("Scanner capture started.", data={"captureId": capture_id, "capture": capture})
+        def _capture_job_update(job_id: str, **updates: Any) -> None:
+            with capture_jobs_lock:
+                job = capture_jobs.get(job_id)
+                if job is None:
+                    return
+                job.update(updates)
 
-    @app.get("/api/config/scanner/capture/<string:capture_id>/status")
-    def scanner_capture_status(capture_id: str) -> tuple[Response, int]:
-        capture_id = capture_id.strip()
-        if not capture_id:
-            return api_error("capture_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            _, capture_status_response = _scanner_request_json(
-                scanner_settings,
-                f"/capture/{capture_id}/status",
-                method="GET",
-            )
-            capture = capture_status_response.get("capture") or {}
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner capture status failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Capture status failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
-        return api_success("Scanner capture status loaded.", data={"captureId": capture_id, "capture": capture})
+        def _run_capture_job(job_id: str, readability_required: bool, timeout_seconds: int) -> None:
+            _capture_job_update(job_id, state="running", startedAt=datetime.now(timezone.utc).isoformat())
+            try:
+                _, start_capture_response = _scanner_request_json(
+                    scanner_settings,
+                    "/capture/start",
+                    method="POST",
+                    body={
+                        "readability_required": bool(readability_required),
+                        "timeout_seconds": int(timeout_seconds),
+                    },
+                )
+                if start_capture_response.get("ok") is False:
+                    raise RuntimeError(start_capture_response.get("message") or "Scanner capture start failed.")
+                capture = start_capture_response.get("capture") or {}
+                capture_id = str(capture.get("capture_id") or capture.get("job_id") or "").strip()
+                if not capture_id:
+                    raise RuntimeError("Scanner capture id was not returned.")
+                _capture_job_update(job_id, captureId=capture_id, scannerStatus="started")
 
-    @app.get("/api/config/scanner/capture/<string:capture_id>/result")
-    def scanner_capture_result(capture_id: str) -> Response | tuple[Response, int]:
-        capture_id = capture_id.strip()
-        if not capture_id:
-            return api_error("capture_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            _, content_type, image_payload = _scanner_request_bytes(scanner_settings, f"/capture/{capture_id}/result")
-            if not image_payload:
-                raise RuntimeError("Scanner returned an empty rectified image.")
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Scanner capture result failed with HTTP {ex.code}.",
-                error_code="SCANNER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach scanner service: {ex}",
-                error_code="SCANNER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Capture result failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
+                max_attempts = max(1, scanner_settings.job_poll_max_attempts)
+                interval_seconds = max(0.05, float(scanner_settings.job_poll_interval_seconds))
+                latest_capture = capture
+                for attempt in range(max_attempts):
+                    _, capture_status_response = _scanner_request_json(
+                        scanner_settings,
+                        f"/capture/{capture_id}/status",
+                        method="GET",
+                    )
+                    latest_capture = capture_status_response.get("capture") or {}
+                    scanner_status = str(latest_capture.get("status") or "").strip().lower()
+                    _capture_job_update(
+                        job_id,
+                        scannerStatus=scanner_status or "unknown",
+                        attempts=attempt + 1,
+                    )
+                    if scanner_status in {"succeeded", "failed"}:
+                        break
+                    time.sleep(interval_seconds)
 
-        runtime_state.set_captured_image(
-            file_name=f"rectified-{capture_id}.png",
-            content_type=content_type,
-            content=image_payload,
-        )
-        return send_file(
-            io.BytesIO(image_payload),
-            mimetype=content_type,
-            as_attachment=False,
-            download_name=f"rectified-{capture_id}.png",
-            max_age=0,
-        )
+                final_status = str(latest_capture.get("status") or "").strip().lower()
+                if final_status != "succeeded":
+                    if final_status not in {"failed"}:
+                        _capture_job_update(
+                            job_id,
+                            state="timeout",
+                            completedAt=datetime.now(timezone.utc).isoformat(),
+                            error="Capture status polling timed out.",
+                        )
+                        return
+                    raise RuntimeError(
+                        f"Scanner capture failed: {latest_capture.get('error') or 'unknown_error'} - "
+                        f"{latest_capture.get('detail') or 'no detail'}."
+                    )
 
-    @app.post("/api/config/scanner/capture/run")
-    def scanner_capture_run() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        readability_required = bool(payload.get("readability_required", True))
-        timeout_seconds = int(payload.get("timeout_seconds", 15))
-        job_id = str(uuid4())
-        with capture_jobs_lock:
-            capture_jobs[job_id] = {
-                "jobId": job_id,
-                "state": "pending",
-                "readabilityRequired": readability_required,
-                "timeoutSeconds": timeout_seconds,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "startedAt": None,
-                "completedAt": None,
-                "captureId": None,
-                "scannerStatus": None,
-                "attempts": 0,
-                "error": None,
-                "errorCode": None,
-                "details": None,
-                "fileName": None,
-                "contentType": None,
-                "capturedAt": None,
-                "imageUrl": None,
-            }
-
-        worker = threading.Thread(
-            target=_run_capture_job,
-            args=(job_id, readability_required, timeout_seconds),
-            daemon=True,
-        )
-        worker.start()
-        return api_success(
-            "Scanner capture orchestration started.",
-            data={"jobId": job_id, "state": "pending"},
-            status_code=202,
-        )
-
-    @app.get("/api/config/scanner/capture/run/<string:job_id>")
-    def scanner_capture_run_status(job_id: str) -> tuple[Response, int]:
-        job_id = job_id.strip()
-        if not job_id:
-            return api_error("job_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
-        try:
-            snapshot = _capture_job_snapshot(job_id)
-        except KeyError:
-            return api_error("Capture job not found.", error_code="CAPTURE_JOB_NOT_FOUND", status_code=404)
-        return api_success("Capture orchestration status loaded.", data=snapshot)
-
-    @app.get("/api/config/serial-ports")
-    def serial_ports() -> tuple[Response, int]:
-        try:
-            from serial.tools import list_ports
-        except ImportError:
-            return api_error(
-                "Serial port listing requires pyserial.",
-                error_code="SERIAL_LIST_UNAVAILABLE",
-                status_code=503,
-            )
-
-        try:
-            entries = []
-            is_windows = sys.platform.startswith("win")
-            is_linux = sys.platform.startswith("linux")
-            for p in list_ports.comports():
-                device = (p.device or "").strip()
-                if not device:
-                    continue
-
-                # Keep UI selection strict:
-                # - Windows: COM ports only
-                # - Linux: USB serial adapters only (/dev/ttyUSB* or /dev/ttyACM*)
-                if is_windows and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
-                    continue
-                if is_linux:
-                    linux_match = re.fullmatch(r"(?:/dev/)?tty(?:USB|ACM)\d+", device, flags=re.IGNORECASE)
-                    if not linux_match:
-                        continue
-                    # Normalize to absolute /dev path for consistent UI and connect payloads.
-                    if not device.startswith("/dev/"):
-                        device = f"/dev/{device}"
-
-                if is_windows:
-                    # Normalize Windows device name casing.
-                    device = device.upper()
-
-                entries.append(
-                    {
-                        "device": device,
-                        "description": (p.description or "").strip(),
-                        "manufacturer": (p.manufacturer or "").strip(),
-                    }
+                _, content_type, image_payload = _scanner_request_bytes(scanner_settings, f"/capture/{capture_id}/result")
+                if not image_payload:
+                    raise RuntimeError("Scanner returned an empty rectified image.")
+                model = runtime_state.set_captured_image(
+                    file_name=f"rectified-{capture_id}.png",
+                    content_type=content_type,
+                    content=image_payload,
+                )
+                _capture_job_update(
+                    job_id,
+                    state="succeeded",
+                    completedAt=datetime.now(timezone.utc).isoformat(),
+                    fileName=model.file_name,
+                    contentType=model.content_type,
+                    capturedAt=_to_iso8601_utc(model.captured_at),
+                    imageUrl="/api/config/capture/latest/image",
+                )
+            except HTTPError as ex:
+                body = ex.read().decode("utf-8", errors="ignore")
+                _capture_job_update(
+                    job_id,
+                    state="failed",
+                    completedAt=datetime.now(timezone.utc).isoformat(),
+                    error=f"Scanner request failed with HTTP {ex.code}.",
+                    errorCode="SCANNER_HTTP_ERROR",
+                    details={"statusCode": ex.code, "responseBody": body[:4000]},
+                )
+            except URLError as ex:
+                _capture_job_update(
+                    job_id,
+                    state="failed",
+                    completedAt=datetime.now(timezone.utc).isoformat(),
+                    error=f"Failed to reach scanner service: {ex}",
+                    errorCode="SCANNER_UNREACHABLE",
+                )
+            except Exception as ex:
+                _capture_job_update(
+                    job_id,
+                    state="failed",
+                    completedAt=datetime.now(timezone.utc).isoformat(),
+                    error=str(ex),
+                    errorCode="SCANNER_CAPTURE_FAILED",
                 )
 
-            entries.sort(key=lambda x: x["device"])
-        except Exception as ex:
-            return api_error(
-                f"Failed to list serial ports: {ex}",
-                error_code="SERIAL_LIST_FAILED",
-                status_code=500,
-            )
-
-        return api_success(message="Serial ports listed.", data={"ports": entries})
-
-    @app.get("/api/config/serial-port-check")
-    def serial_port_check() -> tuple[Response, int]:
-        device = str(request.args.get("device", "")).strip()
-        if not device:
-            return api_error("device is required.", error_code="SERIAL_DEVICE_REQUIRED", status_code=400)
-        if not device.startswith("/dev/") and not re.fullmatch(r"COM\d+", device, flags=re.IGNORECASE):
-            return api_error("Invalid serial device path.", error_code="SERIAL_DEVICE_INVALID", status_code=400)
-
-        exists = os.path.exists(device)
-        readable = os.access(device, os.R_OK) if exists else False
-        writable = os.access(device, os.W_OK) if exists else False
-        resolved_target = ""
-        if exists:
+        @app.post("/api/config/scanner/capture/start")
+        def scanner_capture_start() -> tuple[Response, int]:
+            payload = _get_json_dict()
+            request_payload = {
+                "readability_required": bool(payload.get("readability_required", True)),
+                "timeout_seconds": int(payload.get("timeout_seconds", 15)),
+            }
             try:
-                resolved_target = os.path.realpath(device)
-            except Exception:
-                resolved_target = ""
+                _, start_capture_response = _scanner_request_json(
+                    scanner_settings,
+                    "/capture/start",
+                    method="POST",
+                    body=request_payload,
+                )
+                if start_capture_response.get("ok") is False:
+                    raise RuntimeError(start_capture_response.get("message") or "Scanner capture start failed.")
+                capture = start_capture_response.get("capture") or {}
+                capture_id = str(capture.get("capture_id") or capture.get("job_id") or "").strip()
+                if not capture_id:
+                    raise RuntimeError("Scanner capture id was not returned.")
+            except HTTPError as ex:
+                body = ex.read().decode("utf-8", errors="ignore")
+                return api_error(
+                    f"Scanner capture start failed with HTTP {ex.code}.",
+                    error_code="SCANNER_HTTP_ERROR",
+                    status_code=502,
+                    details={"statusCode": ex.code, "responseBody": body[:4000]},
+                )
+            except URLError as ex:
+                return api_error(
+                    f"Failed to reach scanner service: {ex}",
+                    error_code="SCANNER_UNREACHABLE",
+                    status_code=502,
+                )
+            except Exception as ex:
+                return api_error(f"Capture start failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
+            return api_success("Scanner capture started.", data={"captureId": capture_id, "capture": capture})
 
-        return api_success(
-            message="Serial device check complete.",
-            data={
-                "device": device,
-                "exists": bool(exists),
-                "readable": bool(readable),
-                "writable": bool(writable),
-                "resolvedTarget": resolved_target,
-            },
-        )
+        @app.get("/api/config/scanner/capture/<string:capture_id>/status")
+        def scanner_capture_status(capture_id: str) -> tuple[Response, int]:
+            capture_id = capture_id.strip()
+            if not capture_id:
+                return api_error("capture_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
+            try:
+                _, capture_status_response = _scanner_request_json(
+                    scanner_settings,
+                    f"/capture/{capture_id}/status",
+                    method="GET",
+                )
+                capture = capture_status_response.get("capture") or {}
+            except HTTPError as ex:
+                body = ex.read().decode("utf-8", errors="ignore")
+                return api_error(
+                    f"Scanner capture status failed with HTTP {ex.code}.",
+                    error_code="SCANNER_HTTP_ERROR",
+                    status_code=502,
+                    details={"statusCode": ex.code, "responseBody": body[:4000]},
+                )
+            except URLError as ex:
+                return api_error(
+                    f"Failed to reach scanner service: {ex}",
+                    error_code="SCANNER_UNREACHABLE",
+                    status_code=502,
+                )
+            except Exception as ex:
+                return api_error(f"Capture status failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
+            return api_success("Scanner capture status loaded.", data={"captureId": capture_id, "capture": capture})
 
-    @app.post("/api/config/connect")
-    def connect() -> tuple[Response, int]:
-        if provider.printer_service.is_open:
-            return api_error(
-                message=f"Already connected to {provider.printer_service.port_name}. Disconnect first.",
-                error_code="ALREADY_CONNECTED",
-                status_code=409,
+        @app.get("/api/config/scanner/capture/<string:capture_id>/result")
+        def scanner_capture_result(capture_id: str) -> Response | tuple[Response, int]:
+            capture_id = capture_id.strip()
+            if not capture_id:
+                return api_error("capture_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
+            try:
+                _, content_type, image_payload = _scanner_request_bytes(scanner_settings, f"/capture/{capture_id}/result")
+                if not image_payload:
+                    raise RuntimeError("Scanner returned an empty rectified image.")
+            except HTTPError as ex:
+                body = ex.read().decode("utf-8", errors="ignore")
+                return api_error(
+                    f"Scanner capture result failed with HTTP {ex.code}.",
+                    error_code="SCANNER_HTTP_ERROR",
+                    status_code=502,
+                    details={"statusCode": ex.code, "responseBody": body[:4000]},
+                )
+            except URLError as ex:
+                return api_error(
+                    f"Failed to reach scanner service: {ex}",
+                    error_code="SCANNER_UNREACHABLE",
+                    status_code=502,
+                )
+            except Exception as ex:
+                return api_error(f"Capture result failed: {ex}", error_code="SCANNER_CAPTURE_FAILED", status_code=500)
+
+            runtime_state.set_captured_image(
+                file_name=f"rectified-{capture_id}.png",
+                content_type=content_type,
+                content=image_payload,
+            )
+            return send_file(
+                io.BytesIO(image_payload),
+                mimetype=content_type,
+                as_attachment=False,
+                download_name=f"rectified-{capture_id}.png",
+                max_age=0,
             )
 
-        payload = _get_json_dict()
-        com_port = (
-            payload.get("comPort")
-            or payload.get("com_port")
-            or request.args.get("comPort")
-            or request.args.get("com_port")
-            or provider.printer_service.default_com_port
-        )
-        raw_baud = payload.get("baudRate") or payload.get("baud_rate") or request.args.get("baudRate")
-        try:
-            baud_rate = _parse_optional_int(raw_baud) or provider.printer_service.default_baud_rate
-            provider.printer_service.open_port(str(com_port), baud_rate)
-        except ValueError as ex:
-            return api_error(str(ex), error_code="INVALID_BAUD_RATE", status_code=400)
-        except Exception as ex:
-            return api_error(f"Failed to connect: {ex}", error_code="CONNECT_FAILED", status_code=400)
+        @app.post("/api/config/scanner/capture/run")
+        def scanner_capture_run() -> tuple[Response, int]:
+            payload = _get_json_dict()
+            readability_required = bool(payload.get("readability_required", True))
+            timeout_seconds = int(payload.get("timeout_seconds", 15))
+            job_id = str(uuid4())
+            with capture_jobs_lock:
+                capture_jobs[job_id] = {
+                    "jobId": job_id,
+                    "state": "pending",
+                    "readabilityRequired": readability_required,
+                    "timeoutSeconds": timeout_seconds,
+                    "createdAt": datetime.now(timezone.utc).isoformat(),
+                    "startedAt": None,
+                    "completedAt": None,
+                    "captureId": None,
+                    "scannerStatus": None,
+                    "attempts": 0,
+                    "error": None,
+                    "errorCode": None,
+                    "details": None,
+                    "fileName": None,
+                    "contentType": None,
+                    "capturedAt": None,
+                    "imageUrl": None,
+                }
 
-        return api_success(
-            message=f"Connected to {provider.printer_service.port_name}.",
-            data=asdict(provider.printer_service.get_status()),
-        )
-
-    @app.post("/api/config/disconnect")
-    def disconnect() -> tuple[Response, int]:
-        if not provider.printer_service.is_open:
-            return api_error("Printer is not connected.", error_code="NOT_CONNECTED", status_code=409)
-        if provider.printer_service.is_printing:
-            return api_error(
-                "Cannot disconnect while printing.",
-                error_code="PRINTER_BUSY",
-                status_code=409,
+            worker = threading.Thread(
+                target=_run_capture_job,
+                args=(job_id, readability_required, timeout_seconds),
+                daemon=True,
+            )
+            worker.start()
+            return api_success(
+                "Scanner capture orchestration started.",
+                data={"jobId": job_id, "state": "pending"},
+                status_code=202,
             )
 
-        provider.printer_service.close_port()
-        return api_success("Disconnected from printer.", data=asdict(provider.printer_service.get_status()))
+        @app.get("/api/config/scanner/capture/run/<string:job_id>")
+        def scanner_capture_run_status(job_id: str) -> tuple[Response, int]:
+            job_id = job_id.strip()
+            if not job_id:
+                return api_error("job_id is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
+            try:
+                snapshot = _capture_job_snapshot(job_id)
+            except KeyError:
+                return api_error("Capture job not found.", error_code="CAPTURE_JOB_NOT_FOUND", status_code=404)
+            return api_success("Capture orchestration status loaded.", data=snapshot)
 
     @app.get("/api/cmd/status")
     def status() -> tuple[Response, int]:
-        status_model = provider.printer_service.get_status()
-        return api_success(message="Printer status loaded.", data=asdict(status_model))
-
-    @app.post("/api/config/upload")
-    def upload_svg() -> tuple[Response, int]:
-        upload = request.files.get("svg") or request.files.get("file")
-        if upload is None:
-            return api_error("No SVG file uploaded.", error_code="SVG_REQUIRED", status_code=400)
-
-        payload = upload.read()
-        if not payload:
-            return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
-
-        model = runtime_state.set_uploaded_svg(upload.filename or "uploaded.svg", payload)
-        return api_success(
-            message="SVG uploaded successfully.",
-            data={
-                "fileName": model.file_name,
-                "sizeBytes": len(model.content),
-                "uploadedAt": _to_iso8601_utc(model.uploaded_at),
-            },
-            status_code=201,
-        )
+        return api_success(message="Printer status loaded.", data=_printer_status_public_dict(provider))
 
     @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:
@@ -1314,10 +1108,10 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
 
-        upload = request.files.get("svg")
+        upload = request.files.get("svg") or request.files.get("file")
         if upload is None:
             return api_error(
-                "SVG file is required on each print (multipart field 'svg').",
+                "SVG file is required on each print (multipart field 'svg' or 'file').",
                 error_code="SVG_REQUIRED",
                 status_code=400,
             )
@@ -1336,10 +1130,10 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
 
-        upload = request.files.get("svg")
+        upload = request.files.get("svg") or request.files.get("file")
         if upload is None:
             return api_error(
-                "SVG file is required on each bulk print (multipart field 'svg').",
+                "SVG file is required on each bulk print (multipart field 'svg' or 'file').",
                 error_code="SVG_REQUIRED",
                 status_code=400,
             )
@@ -1380,6 +1174,12 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def void_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
+            if provider.printer_service.is_voiding:
+                return api_error(
+                    "Void operation already running.",
+                    error_code="VOID_BUSY",
+                    status_code=409,
+                )
             if provider.printer_service.is_printing:
                 stop_requested = provider.printer_service.request_print_cancel()
                 if not stop_requested:
@@ -1389,33 +1189,33 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     message="Current print job stop requested. The printer will eject and return to idle.",
                     data=data,
                 )
-            result = _run_async(provider.printer_service.void_print())
+            _run_async(provider.printer_service.void_print())
         except RuntimeError as ex:
             return api_error(str(ex), error_code="VOID_RUNTIME_ERROR", status_code=409)
         except Exception as ex:
             return api_error(f"Void print failed: {ex}", error_code="VOID_FAILED", status_code=500)
 
-        return api_success("Void print completed.", data=asdict(result))
+        return api_success("Void print completed.", data={})
 
     @app.post("/api/config/change-pen/start")
     def change_pen_start() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
             _ensure_not_busy(provider)
-            result = _run_async(provider.printer_service.pen_change_start())
+            _run_async(provider.printer_service.pen_change_start())
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PEN_CHANGE_STATE_ERROR", status_code=409)
         except Exception as ex:
             return api_error(f"Pen change start failed: {ex}", error_code="PEN_CHANGE_START_FAILED", status_code=500)
 
-        return api_success("Pen change start completed.", data=asdict(result))
+        return api_success("Pen change start completed.", data={})
 
     @app.post("/api/config/change-pen/finish")
     def change_pen_finish() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
             _ensure_not_busy(provider)
-            result = _run_async(provider.printer_service.pen_change_finish())
+            _run_async(provider.printer_service.pen_change_finish())
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PEN_CHANGE_STATE_ERROR", status_code=409)
         except Exception as ex:
@@ -1425,7 +1225,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 status_code=500,
             )
 
-        return api_success("Pen change finish completed.", data=asdict(result))
+        return api_success("Pen change finish completed.", data={})
 
     @app.post("/api/config/change-pen")
     def change_pen() -> tuple[Response, int]:
@@ -1443,7 +1243,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     @app.post("/api/config/reset")
     def reset() -> tuple[Response, int]:
-        if provider.printer_service.is_printing:
+        if provider.printer_service.is_busy:
             return api_error(
                 "Cannot reset while printer is busy.",
                 error_code="PRINTER_BUSY",
@@ -1461,16 +1261,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except Exception as ex:
             return api_error(f"Reset failed: {ex}", error_code="RESET_FAILED", status_code=500)
 
-        clear_uploaded_svg = parse_bool(payload.get("clearUploadedSvg"), default=False)
-        if clear_uploaded_svg:
-            runtime_state.clear_uploaded_svg()
-
         return api_success(
             message="Printer distance stats reset.",
-            data={
-                "stats": stats,
-                "clearedUploadedSvg": clear_uploaded_svg,
-            },
+            data={"maxPenDistanceM": stats["maxPenDistanceM"]},
         )
 
     @app.post("/api/config/pen-max-distance")
@@ -1498,32 +1291,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             message="Max pen distance updated.",
             data={"stats": stats},
         )
-
-    @app.post("/api/config/capture/request")
-    def request_capture() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        try:
-            response_payload = _trigger_capture_reset(capture_settings, payload)
-        except RuntimeError as ex:
-            return api_error(str(ex), error_code="CAPTURE_NOT_CONFIGURED", status_code=400)
-        except HTTPError as ex:
-            body = ex.read().decode("utf-8", errors="ignore")
-            return api_error(
-                f"Capture reset endpoint responded with HTTP {ex.code}.",
-                error_code="CAPTURE_TRIGGER_HTTP_ERROR",
-                status_code=502,
-                details={"statusCode": ex.code, "responseBody": body[:4000]},
-            )
-        except URLError as ex:
-            return api_error(
-                f"Failed to reach capture reset endpoint: {ex}",
-                error_code="CAPTURE_TRIGGER_UNREACHABLE",
-                status_code=502,
-            )
-        except Exception as ex:
-            return api_error(f"Capture trigger failed: {ex}", error_code="CAPTURE_TRIGGER_FAILED", status_code=500)
-
-        return api_success("Capture reset command sent.", data=response_payload)
 
     def _scanner_manual_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
         """Strip API-only keys so they are never sent to the scanner session endpoints."""
@@ -1619,9 +1386,14 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data=data,
         )
 
-    @app.post("/api/config/scanner/capture-manual")
-    def scanner_capture_manual() -> tuple[Response, int]:
-        return _scanner_capture_manual_impl(include_data_uri_default=False)
+    def _register_redundant_capture_manual_route() -> None:
+        """
+        POST /api/config/scanner/capture-manual — disabled; use POST .../capture/oneshot instead.
+        Intentionally never called. Invoke from create_app to re-enable.
+        """
+        @app.post("/api/config/scanner/capture-manual")
+        def scanner_capture_manual() -> tuple[Response, int]:
+            return _scanner_capture_manual_impl(include_data_uri_default=False)
 
     @app.post("/api/config/scanner/capture/oneshot")
     def scanner_capture_oneshot() -> tuple[Response, int]:
@@ -1696,38 +1468,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data={"items": items, "days": days, "limit": limit},
         )
 
-    @app.get("/api/config/requests/<string:request_id>")
-    def get_request(request_id: str) -> tuple[Response, int]:
-        try:
-            request_uuid = UUID(request_id)
-        except ValueError:
-            return api_error("Invalid request ID format.", error_code="INVALID_REQUEST_ID", status_code=400)
-
-        log = _run_async(provider.print_approval_service.get_request_log_async(request_uuid))
-        if log is None:
-            return api_error(
-                f"Request log with ID {request_id} not found.",
-                error_code="REQUEST_NOT_FOUND",
-                status_code=404,
-            )
-        return api_success(message="Request log loaded.", data=log.to_dict())
-
-    @app.get("/api/config/requests")
-    def list_requests() -> tuple[Response, int]:
-        try:
-            count = int(request.args.get("count", "10"))
-            if count < 1:
-                count = 1
-            if count > 100:
-                count = 100
-        except ValueError:
-            return api_error("count must be an integer.", error_code="INVALID_COUNT", status_code=400)
-
-        logs = _run_async(provider.print_approval_service.get_recent_requests_async(count))
-        return api_success(
-            message="Recent request logs loaded.",
-            data=[entry.to_dict() for entry in logs],
-        )
+    run_startup_autoconnect(provider.printer_service)
 
     return app
 

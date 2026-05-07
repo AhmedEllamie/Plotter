@@ -52,7 +52,7 @@ Main runtime components:
 6. **Frontend and operator surfaces**
    - Browser UI: `flask_app/static/index.html`, `app.js`, `styles.css`
    - Configuration page: `flask_app/static/configuration.html`, `configuration.js`
-   - Optional fullscreen pen control app: `flask_app/pen_kiosk_app.py`
+   - Optional fullscreen pen control app: `plotter_signature/desktop/pen_kiosk.py`
 
 ---
 
@@ -106,10 +106,11 @@ Used for:
 
 ### 4.4 Tkinter Pen Kiosk Mode
 
-`python -m Software.flask_app.pen_kiosk_app`
+`python -m plotter_signature.desktop.pen_kiosk`
 
 - Fullscreen desktop operator UI
 - Uses Flask backend endpoints over HTTP (`/api/cmd/status`, `/api/config/change-pen/*`, `/api/config/reset`, `/api/config/pen-max-distance`)
+- Does not open local USB; plotter serial is owned by the Flask server process (`printer_connected` in status reflects that link)
 
 ---
 
@@ -188,7 +189,11 @@ Implemented in `services/printer/printer_service.py`.
   - parity none, 8-bit, 1 stop bit
   - timeout `0`, write timeout `2.0`
   - DTR/RTS enabled
-  - startup wait `1.5s` before buffer reset
+  - startup wait `1.5s` after open
+- **Boot banner identity (optional):** Before clearing RX/TX, the service may read unprompted firmware text for a configurable time and require substring markers (default: `start`, `Marlin K_AT`). Configure via `appsettings.json` → `Printer.VerifySerialIdentity`, `SerialIdentityContains`, `SerialIdentityTimeoutSeconds`. Set `VerifySerialIdentity` to `false` to skip (e.g. bring-up). On mismatch, the port is closed and **AutoConnect** tries the next candidate port.
+- After a successful identity check (or when verification is off), input/output buffers are reset (as before).
+- `autoconnect()` and `open_port()` are serialized with an internal `RLock` so concurrent open/close does not race.
+- **`ensure_serial_ready(max_attempts=3)`** (used by HTTP print/pen/void guards): if the port is not open, retries `autoconnect()` with a short delay so idle disconnects do not require a full process restart.
 
 ### 7.2 Print Lifecycle
 
@@ -332,7 +337,7 @@ Not durable across process restart.
 - latest uploaded SVG
 - latest captured image
 
-Used by Flask endpoints to allow multi-step workflow (`upload` then `print`, capture retrieval endpoints, etc.).
+Used by Flask endpoints for optional in-memory assets (rectified capture, etc.). Print sends SVG with each `POST /api/cmd/print` request.
 
 Not durable across process restart.
 
@@ -344,14 +349,11 @@ Not durable across process restart.
 
 From `api/printer_controller.py`:
 
-- `POST /printer/connect`
-- `POST /printer/disconnect`
 - `GET /printer/status`
 - `POST /printer/generate`
 - `POST /printer/print`
 - `POST /printer/print/bulk`
 - `POST /printer/print-with-approval`
-- `GET /printer/requests/{request_id}`
 
 FastAPI validation style:
 - Raises HTTP 400/409/404 via `HTTPException`.
@@ -361,10 +363,7 @@ FastAPI validation style:
 From `flask_app/app.py`:
 
 Core printer:
-- `POST /api/config/connect`
-- `POST /api/config/disconnect`
 - `GET /api/cmd/status`
-- `POST /api/config/upload`
 - `POST /api/cmd/print`
 - `POST /api/cmd/print/bulk`
 - `POST /api/cmd/bulk/stop`
@@ -376,13 +375,10 @@ Core printer:
 - `POST /api/config/pen-max-distance`
 
 Capture and scanner:
-- `POST /api/config/capture/request` (trigger external capture reset URL)
 - `POST /api/config/capture`
 - `GET /api/config/capture/latest`
 - `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg` (proxy stream)
-- `POST /api/config/scanner/manual-config`
-- `POST /api/config/scanner/focus-adjust`
 - `POST /api/config/scanner/capture/start`
 - `GET /api/config/scanner/capture/{capture_id}/status`
 - `GET /api/config/scanner/capture/{capture_id}/result`
@@ -393,10 +389,8 @@ Capture and scanner:
 System/config:
 - `GET /api/cmd/health`
 - `GET /api/config`
-- `GET /api/config/serial-ports`
-- `GET /api/config/serial-port-check`
-- `GET /api/config/requests/{request_id}`
-- `GET /api/config/requests?count=10`
+
+Serial scan/check/connect/disconnect is not exposed through Flask/FastAPI config routes. The Desktop App and CLI use direct serial access and match Ubuntu USB metadata (`device`, `name`, `description`, `manufacturer`, `hwid`) with `--device-match` / `PLOTTER_SERIAL_DEVICE_MATCH`.
 
 Flask response envelope:
 - success: `{ success: true, message, data, errorCode: null }`
@@ -411,13 +405,11 @@ Flask response envelope:
 
 Configured in `flask_app/config.py` and consumed in `flask_app/app.py`.
 
-### 12.1 Capture Reset Trigger
+### 12.1 External capture reset (`CAPTURE_*` env)
 
-`POST /api/capture/request` sends HTTP request to external reset endpoint using:
-- `CAPTURE_RESET_URL` (required for this feature)
-- `CAPTURE_RESET_TOKEN` (optional bearer token)
-- `CAPTURE_RESET_TIMEOUT_SECONDS`
-- `CAPTURE_RESET_METHOD` (GET/POST/etc)
+The Flask route that proxied **`POST /api/config/capture/request`** was removed. Operators or external automation should call **`CAPTURE_RESET_URL`** directly if needed.
+
+`captureResetConfigured` on **`GET /api/config`** and **`GET /api/cmd/health`** still reflects whether `CAPTURE_RESET_URL` is set.
 
 ### 12.2 Scanner Service HTTP Calls
 
@@ -446,8 +438,8 @@ Served by Flask static files:
 - Configuration page (`/configuration`)
 
 Capabilities include:
-- printer connect/disconnect/status
-- SVG upload + print
+- printer AutoConnect/disconnect/status
+- SVG attach-to-print workflow (multipart on each job)
 - bulk print and stop
 - void print
 - pen change commands
@@ -456,14 +448,13 @@ Capabilities include:
 
 ### 13.2 Pen Kiosk Desktop App
 
-`flask_app/pen_kiosk_app.py`:
+`plotter_signature/desktop/pen_kiosk.py` (entry: `python -m plotter_signature.desktop.pen_kiosk`):
+
 - fullscreen Tkinter app
-- polls `/api/status` every 3s
-- actions:
-  - PenDown / PenUp
-  - set max pen distance
-  - reset cumulative distance
-- intended for kiosk sessions and operator-only maintenance station
+- polls **`GET /api/cmd/status`** every 3s (with `X-API-Key` when required)
+- shows **API reachability** and **`printer_connected`** (serial is opened only by the Flask/server process; the kiosk does not use local USB connect/disconnect)
+- server URL + **Apply** (persisted locally as `api_base_url` only)
+- HTTP actions: PenDown / PenUp, max pen distance, reset cumulative distance
 
 ---
 
@@ -509,7 +500,7 @@ Uses env file:
 ### 15.2 Kiosk Service
 
 Runs:
-- `/opt/plotter-signature/.venv/bin/python -m Software.flask_app.pen_kiosk_app`
+- `/opt/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk`
 
 Intended for graphical user session; separate from Flask backend service.
 
@@ -539,6 +530,10 @@ When `appsettings.json` exists at the repo root, these sections are read:
 - `Printer` (`ComPort`, `BaudRate`)
 - `PrintRetry` (`MaxRetries`, `RetryDelayMs`)
 - `ApprovalService` (`Endpoint`, `ApiKey`, `TimeoutSeconds`, `UseMockService`)
+
+### 16.4 Printer serial (startup)
+
+- `AUTO_CONNECT_ON_STARTUP` — when **unset** or not one of `0` / `false` / `no` / `off` (case-insensitive), **Flask** and **FastAPI** call `PrinterService.autoconnect()` **once** at process startup. On failure, logs a warning and continues (no crash). Set to `0` (etc.) to disable (e.g. development without a plotter).
 
 ---
 

@@ -23,6 +23,11 @@ class IPrinterService(ABC):
 
     @property
     @abstractmethod
+    def is_busy(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
     def default_com_port(self) -> str:
         raise NotImplementedError
 
@@ -33,6 +38,14 @@ class IPrinterService(ABC):
 
     @abstractmethod
     def open_port(self, com_port: str | None = None, baud_rate: int | None = None) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def autoconnect(self, explicit_com_port: str | None = None, baud_rate: int | None = None) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def ensure_serial_ready(self, max_attempts: int = 3, delay_seconds: float = 0.3) -> None:
         raise NotImplementedError
 
     @abstractmethod

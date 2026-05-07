@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 API_KEY_ENV_VAR = "PLOTTER_API_KEY"
 API_KEY_HEADER = "X-API-Key"
-DEFAULT_API_KEY = "QSCWDVEFBRGN"
 
 
 @dataclass(frozen=True)
@@ -16,16 +15,24 @@ class ApiKeyValidationResult:
     message: str
 
 
+def is_api_key_required() -> bool:
+    return bool(os.getenv(API_KEY_ENV_VAR, "").strip())
+
+
 def get_configured_api_key() -> str:
-    configured = os.getenv(API_KEY_ENV_VAR, "").strip()
-    if configured:
-        return configured
-    return DEFAULT_API_KEY
+    """Returns the server key when configured; empty when auth is disabled."""
+    return os.getenv(API_KEY_ENV_VAR, "").strip()
 
 
 def validate_api_key(provided_api_key: str | None) -> ApiKeyValidationResult:
-    configured_api_key = get_configured_api_key()
+    if not is_api_key_required():
+        return ApiKeyValidationResult(
+            is_valid=True,
+            is_server_configured=False,
+            message="API key auth is disabled.",
+        )
 
+    configured_api_key = get_configured_api_key()
     normalized_provided = (provided_api_key or "").strip()
     if not normalized_provided:
         return ApiKeyValidationResult(

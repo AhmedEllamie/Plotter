@@ -465,7 +465,7 @@ async function connectPrinter() {
   }
   appendConfigLog(`Connecting printer${comPort ? ` on ${comPort}` : ""}...`);
   try {
-    await apiPostJson("/api/config/connect", payload);
+    await apiPostJson("/api/config/auto-connect", payload);
     persistConnectionSettings();
     showConfigMessage("Printer connected.");
     appendConfigLog("Printer connected.");
@@ -508,7 +508,7 @@ async function runChangePen() {
 async function runReset() {
   appendConfigLog("Resetting distance stats...");
   try {
-    await apiPostJson("/api/config/reset", { clearUploadedSvg: false });
+    await apiPostJson("/api/config/reset", {});
     showConfigMessage("Distance reset completed.");
     appendConfigLog("Distance reset completed.");
   } catch (error) {
@@ -744,18 +744,10 @@ function adjustManualFocus(delta) {
   input.value = String(next);
   renderFocusLabel();
   persistCaptureSettings();
-  showConfigMessage(`Manual focus updated: ${next}.`);
   const direction = delta >= 0 ? "+" : "-";
   const step = Math.abs(delta);
-  void apiPostJson("/api/config/scanner/focus-adjust", { direction, step })
-    .then(() => {
-      const autofocusMode = isAutofocusEnabled() ? "enabled" : "disabled";
-      showConfigMessage(`Focus adjusted (${direction}${step}) and synced (autofocus ${autofocusMode}).`);
-    })
-    .catch(() => {
-      // Fallback keeps compatibility if scanner does not support focus-adjust.
-      queueManualFocusSync();
-    });
+  showConfigMessage(`Manual focus updated (${direction}${step}): ${next}. Use Send scanner config to apply.`);
+  appendConfigLog(`Manual focus: ${next} (will apply on Send scanner config).`);
 }
 
 function addQuadPointFromClick(event) {

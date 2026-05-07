@@ -3,11 +3,42 @@ from __future__ import annotations
 import json
 import os
 import threading
+from pathlib import Path
 from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
+
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 _DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
+
+
+def _kiosk_settings_path() -> Path:
+    local = os.getenv("LOCALAPPDATA") or os.getenv("XDG_CONFIG_HOME") or ""
+    if local:
+        return Path(local) / "PlotterPenKiosk" / "settings.json"
+    return Path.home() / ".config" / "plotter_pen_kiosk" / "settings.json"
+
+
+def _load_kiosk_settings() -> dict[str, str]:
+    path = _kiosk_settings_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    val = data.get("api_base_url")
+    return {"api_base_url": val.strip()} if isinstance(val, str) else {}
+
+
+def _save_kiosk_settings(api_base_url: str) -> None:
+    path = _kiosk_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"api_base_url": api_base_url.strip().rstrip("/")}, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _read_plotter_api_key_from_file(path: str) -> str:
@@ -27,8 +58,9 @@ def _read_plotter_api_key_from_file(path: str) -> str:
 
 class PenKioskApp:
     def __init__(self, api_base_url: str | None = None) -> None:
+        saved = _load_kiosk_settings()
         default_base = (os.getenv("PLOTTER_KIOSK_API_BASE") or "http://127.0.0.1:5001").strip()
-        resolved_base = (api_base_url or default_base).strip()
+        resolved_base = (api_base_url or saved.get("api_base_url") or default_base).strip()
         self._api_base_url = resolved_base.rstrip("/")
         self._root = Tk()
         self._root.title("Plotter Pen Config Kiosk")
@@ -38,10 +70,11 @@ class PenKioskApp:
 
         self._status_poll_ms = 3000
         self._api_busy = False
+        self._http_ok = False
+        self._plotter_connected = False
 
-        self._connection_badge = StringVar(value="Disconnected")
-        self._busy_badge = StringVar(value="Idle")
-        self._port_value = StringVar(value="N/A")
+        self._server_url_var = StringVar(value=self._api_base_url)
+        self._link_detail_var = StringVar(value="Checking…")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
         self._execution_percent_value = StringVar(value="0.00%")
@@ -50,16 +83,19 @@ class PenKioskApp:
         self._bulk_stop_value = StringVar(value="No")
         self._max_pen_distance_var = StringVar(value="")
         self._inline_error_var = StringVar(value="")
-        self._showing_status_card = True
 
-        self._connection_badge_label: Label | None = None
+        self._mode_label_var = StringVar(value="Status")
+        self._plotter_badge_label: Label | None = None
         self._busy_badge_label: Label | None = None
-        self._feedback_box = None
+        self._server_badge_label: Label | None = None
         self._status_card: Frame | None = None
         self._change_pen_card: Frame | None = None
-        self._mode_label_var = StringVar(value="Status")
+        self._active_card_idx = 0
         self._switch_canvas: Canvas | None = None
         self._switch_knob: int | None = None
+        self._link_lamp_canvas: Canvas | None = None
+        self._link_lamp_oval: int | None = None
+
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -85,9 +121,9 @@ class PenKioskApp:
         )
         self._switch_canvas.pack(side=RIGHT, padx=(0, 10))
         self._switch_canvas.create_rectangle(4, 10, 136, 34, outline="#64748b", fill="#1e293b", width=2)
+        self._switch_canvas.create_text(36, 22, text="S", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
+        self._switch_canvas.create_text(104, 22, text="P", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
         self._switch_knob = self._switch_canvas.create_oval(8, 12, 56, 32, fill="#e2e8f0", outline="#cbd5e1")
-        self._switch_canvas.create_text(30, 22, text="S", fill="#0f172a", font=("Segoe UI", 12, "bold"))
-        self._switch_canvas.create_text(110, 22, text="P", fill="#cbd5e1", font=("Segoe UI", 12, "bold"))
         self._switch_canvas.bind("<Button-1>", self._toggle_cards_event)
 
         cards_container = Frame(root_frame, bg="#0f172a")
@@ -113,7 +149,7 @@ class PenKioskApp:
         )
         self._build_change_pen_card(self._change_pen_card)
 
-        self._show_status_card()
+        self._apply_active_card()
 
     def _build_status_card(self, parent: Frame) -> None:
         Label(
@@ -124,14 +160,66 @@ class PenKioskApp:
             font=("Segoe UI", 18, "bold"),
         ).pack(anchor="w", pady=(0, 10))
 
+        Label(
+            parent,
+            text="Plotter server URL (Flask / plotter-signature)",
+            bg="#111827",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w")
+        server_row = Frame(parent, bg="#111827")
+        server_row.pack(fill=X, pady=(2, 6))
+        Entry(
+            server_row,
+            textvariable=self._server_url_var,
+            font=("Segoe UI", 13),
+            bg="#0b1220",
+            fg="#f8fafc",
+            insertbackground="#f8fafc",
+            relief="flat",
+        ).pack(side=LEFT, fill=X, expand=True, ipady=6, padx=(0, 8))
+        Button(
+            server_row,
+            text="Apply",
+            command=self._apply_server_url,
+            bg="#334155",
+            fg="#ffffff",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=16,
+            pady=8,
+            font=("Segoe UI", 12, "bold"),
+            cursor="hand2",
+        ).pack(side=RIGHT)
+
+        link_row = Frame(parent, bg="#111827")
+        link_row.pack(fill=X, pady=(10, 12))
+        self._link_lamp_canvas = Canvas(
+            link_row, width=48, height=44, bg="#111827", highlightthickness=0, bd=0
+        )
+        self._link_lamp_canvas.pack(side=LEFT)
+        self._link_lamp_oval = self._link_lamp_canvas.create_oval(
+            10, 6, 38, 34, fill="#64748b", outline="#475569", width=2
+        )
+        lbl_col = Frame(link_row, bg="#111827")
+        lbl_col.pack(side=LEFT, padx=(10, 0))
+        Label(
+            lbl_col,
+            textvariable=self._link_detail_var,
+            bg="#111827",
+            fg="#e2e8f0",
+            font=("Segoe UI", 13, "bold"),
+        ).pack(anchor="w")
+
         badges_row = Frame(parent, bg="#111827")
         badges_row.pack(fill=X, pady=(0, 10))
-        self._connection_badge_label = self._badge(badges_row, self._connection_badge, ok=True)
-        self._connection_badge_label.pack(side=LEFT, padx=(0, 8))
-        self._busy_badge_label = self._badge(badges_row, self._busy_badge, ok=True)
+        self._server_badge_label = self._badge(badges_row, ok=False)
+        self._server_badge_label.pack(side=LEFT, padx=(0, 8))
+        self._plotter_badge_label = self._badge(badges_row, ok=False)
+        self._plotter_badge_label.pack(side=LEFT, padx=(0, 8))
+        self._busy_badge_label = self._badge(badges_row, ok=True)
         self._busy_badge_label.pack(side=LEFT)
 
-        self._metric_row(parent, "Port", self._port_value)
         self._metric_row(parent, "Cumulative distance", self._cumulative_distance_value)
         self._metric_row(parent, "Executed distance", self._executed_distance_value)
         self._metric_row(parent, "Execution progress", self._execution_percent_value)
@@ -237,10 +325,10 @@ class PenKioskApp:
             cursor="hand2",
         ).pack(fill=X, pady=(2, 0))
 
-    def _badge(self, parent: Frame, text_variable: StringVar, ok: bool) -> Label:
+    def _badge(self, parent: Frame, *, ok: bool) -> Label:
         return Label(
             parent,
-            textvariable=text_variable,
+            text="",
             bg="#14532d" if ok else "#7f1d1d",
             fg="#dcfce7" if ok else "#fee2e2",
             font=("Segoe UI", 11, "bold"),
@@ -266,57 +354,133 @@ class PenKioskApp:
             font=("Segoe UI", 12, "bold"),
         ).pack(side=RIGHT)
 
+    _SWITCH_KNOB_POS = (
+        (8, 12, 56, 32),
+        (80, 12, 128, 32),
+    )
+
+    def _move_switch_knob(self, idx: int) -> None:
+        if self._switch_canvas is None or self._switch_knob is None:
+            return
+        i = max(0, min(1, idx))
+        x1, y1, x2, y2 = self._SWITCH_KNOB_POS[i]
+        self._switch_canvas.coords(self._switch_knob, x1, y1, x2, y2)
+
+    def _apply_active_card(self) -> None:
+        for card in (self._status_card, self._change_pen_card):
+            if card is not None:
+                card.pack_forget()
+        idx = max(0, min(1, self._active_card_idx))
+        self._active_card_idx = idx
+        if idx == 1 and self._change_pen_card is not None:
+            self._change_pen_card.pack(fill=BOTH, expand=True)
+            self._mode_label_var.set("Change Pen")
+        elif self._status_card is not None:
+            self._status_card.pack(fill=BOTH, expand=True)
+            self._mode_label_var.set("Status")
+        self._move_switch_knob(self._active_card_idx)
+
+    def _toggle_cards_event(self, event: object) -> None:
+        mx = getattr(event, "x", None)
+        if mx is None or self._switch_canvas is None:
+            self._active_card_idx = (self._active_card_idx + 1) % 2
+            self._apply_active_card()
+            return
+        if mx < 70:
+            self._active_card_idx = 0
+        else:
+            self._active_card_idx = 1
+        self._apply_active_card()
+
     def _toggle_fullscreen(self, _event: object) -> None:
         current = bool(self._root.attributes("-fullscreen"))
         self._root.attributes("-fullscreen", not current)
 
-    def _show_status_card(self) -> None:
-        if self._change_pen_card is not None:
-            self._change_pen_card.pack_forget()
-        if self._status_card is not None:
-            self._status_card.pack(fill=BOTH, expand=True)
-        self._showing_status_card = True
-        self._mode_label_var.set("Status")
-        if self._switch_canvas is not None and self._switch_knob is not None:
-            self._switch_canvas.coords(self._switch_knob, 8, 12, 56, 32)
-
-    def _show_change_pen_card(self) -> None:
-        if self._status_card is not None:
-            self._status_card.pack_forget()
-        if self._change_pen_card is not None:
-            self._change_pen_card.pack(fill=BOTH, expand=True)
-        self._showing_status_card = False
-        self._mode_label_var.set("Change Pen")
-        if self._switch_canvas is not None and self._switch_knob is not None:
-            self._switch_canvas.coords(self._switch_knob, 84, 12, 132, 32)
-
-    def _toggle_cards(self) -> None:
-        if self._showing_status_card:
-            self._show_change_pen_card()
+    def _set_link_lamp(self, ok: bool) -> None:
+        if self._link_lamp_canvas is None or self._link_lamp_oval is None:
             return
-        self._show_status_card()
-
-    def _toggle_cards_event(self, _event: object) -> None:
-        self._toggle_cards()
-
-    def _append_feedback(self, message: str, is_error: bool = False) -> None:
-        _ = message
-        _ = is_error
-
-    def _resolve_api_key(self) -> str:
-        """Match Flask auth: prefer live env file (so key rotation applies without kiosk restart)."""
-        explicit = os.getenv("PLOTTER_API_KEY_FILE")
-        if explicit is not None:
-            path = explicit.strip()
-            if path:
-                key = _read_plotter_api_key_from_file(path)
-                if key:
-                    return key
+        if ok:
+            fill, outline = "#22c55e", "#15803d"
         else:
-            key = _read_plotter_api_key_from_file(_DEFAULT_PLOTTER_ENV_FILE)
-            if key:
-                return key
-        return (os.getenv("PLOTTER_API_KEY") or "").strip()
+            fill, outline = "#ef4444", "#b91c1c"
+        self._link_lamp_canvas.itemconfig(self._link_lamp_oval, fill=fill, outline=outline)
+
+    def _update_link_detail_line(self) -> None:
+        http = "OK" if self._http_ok else "unreachable"
+        if not self._http_ok:
+            pc = "—"
+        else:
+            pc = "connected" if self._plotter_connected else "disconnected"
+        self._link_detail_var.set(f"API: {http} | Serial on server: {pc}")
+
+    def _apply_server_url(self) -> None:
+        raw = self._server_url_var.get().strip()
+        if not raw:
+            self._append_feedback("Enter a plotter server URL (e.g. http://192.168.1.5:5001).", is_error=True)
+            return
+        if not raw.lower().startswith(("http://", "https://")):
+            raw = f"http://{raw}"
+        self._api_base_url = raw.rstrip("/")
+        self._server_url_var.set(self._api_base_url)
+        _save_kiosk_settings(self._api_base_url)
+        self._append_feedback("Server URL applied.")
+        self._refresh_status_now()
+
+    def _refresh_status_now(self) -> None:
+        try:
+            status = self._api_get("/api/cmd/status")
+            self._http_ok = True
+            self._plotter_connected = bool(status.get("printer_connected"))
+            is_busy = bool(status.get("is_busy") or status.get("is_printing"))
+
+            self._set_badge_color(self._server_badge_label, "Server: OK", True)
+            self._set_badge_color(
+                self._plotter_badge_label,
+                "Plotter: Connected" if self._plotter_connected else "Plotter: Disconnected",
+                self._plotter_connected,
+            )
+            self._set_badge_color(self._busy_badge_label, "Busy" if is_busy else "Idle", not is_busy)
+
+            self._set_link_lamp(self._http_ok and self._plotter_connected)
+
+            self._cumulative_distance_value.set(self._format_meters_from_mm(status.get("cumulative_distance_mm")))
+            self._executed_distance_value.set(self._format_meters_from_mm(status.get("current_executed_distance_mm")))
+            self._execution_percent_value.set(self._format_percent(status.get("current_execution_percent")))
+
+            max_pen_distance = float(status.get("max_pen_distance_m") or 0.0)
+            self._pen_remaining_value.set(
+                self._format_percent(status.get("remaining_pen_percent")) if max_pen_distance > 0 else "N/A"
+            )
+            self._bulk_progress_value.set(
+                f"{int(status.get('bulk_printed_count') or 0)} / {int(status.get('bulk_requested_total') or 0)}"
+            )
+            self._bulk_stop_value.set("Yes" if bool(status.get("bulk_stop_requested")) else "No")
+
+            if max_pen_distance > 0 and not self._max_pen_distance_var.get().strip():
+                self._max_pen_distance_var.set(str(max_pen_distance))
+        except HTTPError as ex:
+            self._http_ok = False
+            self._plotter_connected = False
+            self._set_badge_color(self._server_badge_label, f"Server: HTTP {ex.code}", False)
+            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
+            self._set_link_lamp(False)
+            self._append_feedback(f"Status HTTP error: {ex.code}", is_error=True)
+        except URLError as ex:
+            self._http_ok = False
+            self._plotter_connected = False
+            self._set_badge_color(self._server_badge_label, "Server: unreachable", False)
+            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
+            self._set_link_lamp(False)
+            self._append_feedback(f"Status network error: {ex.reason}", is_error=True)
+        except Exception as ex:
+            self._http_ok = False
+            self._plotter_connected = False
+            self._set_badge_color(self._server_badge_label, "Server: error", False)
+            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
+            self._set_link_lamp(False)
+            self._append_feedback(f"Status error: {ex}", is_error=True)
+
+        self._update_link_detail_line()
 
     def _request_headers(self, *, json_body: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -350,7 +514,7 @@ class PenKioskApp:
             headers=self._request_headers(json_body=True),
             method="POST",
         )
-        with urlopen(request, timeout=12) as response:
+        with urlopen(request, timeout=30) as response:
             body = response.read().decode("utf-8", errors="ignore")
             parsed = json.loads(body) if body else {}
             if not isinstance(parsed, dict) or parsed.get("success") is False:
@@ -372,6 +536,20 @@ class PenKioskApp:
             data = parsed.get("data")
             return data if isinstance(data, dict) else {}
 
+    def _resolve_api_key(self) -> str:
+        explicit = os.getenv("PLOTTER_API_KEY_FILE")
+        if explicit is not None:
+            path = explicit.strip()
+            if path:
+                key = _read_plotter_api_key_from_file(path)
+                if key:
+                    return key
+        else:
+            key = _read_plotter_api_key_from_file(_DEFAULT_PLOTTER_ENV_FILE)
+            if key:
+                return key
+        return (os.getenv("PLOTTER_API_KEY") or "").strip()
+
     def _run_action(self, success_message: str, endpoint: str) -> None:
         if self._api_busy:
             self._append_feedback("Another action is running. Please wait.", is_error=True)
@@ -382,13 +560,17 @@ class PenKioskApp:
             try:
                 self._api_post(endpoint, {})
                 self._root.after(0, lambda m=success_message: self._append_feedback(m))
-                self._root.after(0, self._refresh_status)
+                self._root.after(0, self._refresh_status_now)
             except Exception as ex:
                 self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
             finally:
                 self._api_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _append_feedback(self, message: str, is_error: bool = False) -> None:
+        _ = message
+        _ = is_error
 
     def _set_max_pen_distance(self) -> None:
         raw_value = self._max_pen_distance_var.get().strip()
@@ -408,7 +590,7 @@ class PenKioskApp:
             try:
                 self._api_post("/api/config/pen-max-distance", {"meters": meters})
                 self._root.after(0, lambda: self._append_feedback("Max pen distance updated."))
-                self._root.after(0, self._refresh_status)
+                self._root.after(0, self._refresh_status_now)
             except Exception as ex:
                 self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
             finally:
@@ -423,9 +605,9 @@ class PenKioskApp:
         def worker() -> None:
             self._api_busy = True
             try:
-                self._api_post("/api/config/reset", {"clearUploadedSvg": False})
+                self._api_post("/api/config/reset", {})
                 self._root.after(0, lambda: self._append_feedback("Distance reset completed."))
-                self._root.after(0, self._refresh_status)
+                self._root.after(0, self._refresh_status_now)
             except Exception as ex:
                 self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
             finally:
@@ -444,34 +626,7 @@ class PenKioskApp:
 
     def _refresh_status(self) -> None:
         try:
-            status = self._api_get("/api/cmd/status")
-            is_open = bool(status.get("is_open"))
-            is_busy = bool(status.get("is_printing"))
-
-            self._set_badge_color(self._connection_badge_label, "Connected" if is_open else "Disconnected", is_open)
-            self._set_badge_color(self._busy_badge_label, "Busy" if is_busy else "Idle", not is_busy)
-            self._port_value.set(str(status.get("port_name") or "N/A"))
-            self._cumulative_distance_value.set(self._format_meters_from_mm(status.get("cumulative_distance_mm")))
-            self._executed_distance_value.set(self._format_meters_from_mm(status.get("current_executed_distance_mm")))
-            self._execution_percent_value.set(self._format_percent(status.get("current_execution_percent")))
-
-            max_pen_distance = float(status.get("max_pen_distance_m") or 0.0)
-            self._pen_remaining_value.set(
-                self._format_percent(status.get("remaining_pen_percent")) if max_pen_distance > 0 else "N/A"
-            )
-            self._bulk_progress_value.set(
-                f"{int(status.get('bulk_printed_count') or 0)} / {int(status.get('bulk_requested_total') or 0)}"
-            )
-            self._bulk_stop_value.set("Yes" if bool(status.get("bulk_stop_requested")) else "No")
-
-            if max_pen_distance > 0 and not self._max_pen_distance_var.get().strip():
-                self._max_pen_distance_var.set(str(max_pen_distance))
-        except HTTPError as ex:
-            self._append_feedback(f"Status HTTP error: {ex.code}", is_error=True)
-        except URLError as ex:
-            self._append_feedback(f"Status network error: {ex.reason}", is_error=True)
-        except Exception as ex:
-            self._append_feedback(f"Status error: {ex}", is_error=True)
+            self._refresh_status_now()
         finally:
             self._root.after(self._status_poll_ms, self._refresh_status)
 

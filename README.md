@@ -115,7 +115,7 @@ Flask endpoints are grouped under two namespaces:
   - `POST /api/cmd/print/bulk`
   - `POST /api/cmd/bulk/stop`
   - `POST /api/cmd/void`
-- `config` APIs: `/api/config/*` for all remaining setup/configuration/scanner/capture/request routes.
+- `config` APIs: `/api/config/*` for setup, scanner, capture, AutoConnect/disconnect, and related routes.
   - One-call async capture orchestration:
     - `POST /api/config/scanner/capture/run`
     - `GET /api/config/scanner/capture/run/<job_id>`

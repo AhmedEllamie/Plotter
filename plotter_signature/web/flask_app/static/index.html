@@ -31,8 +31,8 @@
           </div>
           <div class="status-panel">
             <div class="metric-row">
-              <span>Port</span>
-              <strong id="statusPort">N/A</strong>
+              <span>COM (saved in Config)</span>
+              <strong id="statusPort">--</strong>
             </div>
             <div class="metric-row">
               <span>Cumulative distance (m)</span>
@@ -65,14 +65,14 @@
 
         <section class="card">
           <h2>Main Actions</h2>
-          <p id="uploadedSvgLabel">Uploaded SVG: none</p>
+          <p id="uploadedSvgLabel">No SVG selected — use Choose SVG.</p>
           <p id="bulkProgressLabel">Bulk progress: 0 / 0</p>
           <div class="button-row">
             <button id="captureBtn" class="primary">Capture</button>
             <button id="printBtn" class="primary">Print</button>
             <button id="bulkPrintBtn" class="primary">Bulk Print</button>
             <button id="stopBulkBtn" class="primary" disabled>Stop Bulk</button>
-            <button id="uploadBtn" class="primary">Upload</button>
+            <button id="uploadBtn" class="primary">Choose SVG</button>
             <button id="voidBtn" class="primary">Void</button>
           </div>
           <input id="svgFileInput" type="file" accept=".svg,image/svg+xml" hidden>

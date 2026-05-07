@@ -112,7 +112,7 @@ function formatDistanceMetersFromMm(mmValue) {
 
 function renderStatusGui(status) {
   const isConnected = Boolean(status.is_open);
-  const isBusy = Boolean(status.is_printing);
+  const isBusy = Boolean(status.is_busy ?? status.is_printing);
   const executionPercent = clampPercent(status.current_execution_percent);
   const remainingPenPercent = clampPercent(status.remaining_pen_percent);
   const hasPenConfig = Number(status.max_pen_distance_m || 0) > 0;
@@ -130,7 +130,8 @@ function renderStatusGui(status) {
 
   const portNode = document.getElementById("statusPort");
   if (portNode) {
-    portNode.textContent = status.port_name || "N/A";
+    const saved = String(loadConnectionSettings().comPort || "").trim();
+    portNode.textContent = saved || "--";
   }
 
   const cumulativeNode = document.getElementById("statusCumulativeDistance");
@@ -198,17 +199,18 @@ function clearSelectedSvgUi() {
   }
 }
 
-async function uploadSvgFromFile(file) {
-  const formData = new FormData();
-  formData.append("svg", file);
+async function selectSvgFromFile(file) {
+  if (!file) return;
   try {
-    const data = await apiPostForm("/api/config/upload", formData);
-    state.uploadedSvgName = data.fileName;
+    state.uploadedSvgName = file.name || "svg";
     state.lastSvgFile = file;
-    document.getElementById("uploadedSvgLabel").textContent = `Ready to print: ${data.fileName} (re-select after each job)`;
-    appendLog(`SVG selected (${data.fileName}).`);
+    const label = document.getElementById("uploadedSvgLabel");
+    if (label) {
+      label.textContent = `SVG ready: ${state.uploadedSvgName} (picked locally; sent with each print)`;
+    }
+    appendLog(`SVG selected (${state.uploadedSvgName}).`);
   } catch (error) {
-    appendLog(`Upload error: ${error.message}`, true);
+    appendLog(`File error: ${error.message}`, true);
   }
 }
 
@@ -233,7 +235,7 @@ function logPrintResponse(data, label) {
 
 async function printUploadedSvg() {
   if (!state.lastSvgFile) {
-    appendLog("Select an SVG file first (upload button). Each print requires the file.", true);
+    appendLog("Choose an SVG file first (Choose SVG). Each print sends the file with the request.", true);
     return;
   }
   const formData = new FormData();
@@ -450,7 +452,7 @@ function registerEvents() {
   document.getElementById("svgFileInput").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    await uploadSvgFromFile(file);
+    await selectSvgFromFile(file);
     event.target.value = "";
   });
 }

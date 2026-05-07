@@ -4,7 +4,7 @@
 - Authentication: Not required (before API key enforcement was added).
 
 ## What It Takes
-- Optional JSON: maxPenDistanceM (number), clearUploadedSvg (bool)
+- Optional JSON: **maxPenDistanceM** (number). Legacy **`clearUploadedSvg`** is ignored if sent.
 
 ## Response
 - Success envelope (JSON APIs):
@@ -12,7 +12,7 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data: stats, clearedUploadedSvg
+- Success data: **stats** only (no **clearedUploadedSvg** field)
 
 ## Error Response
 - Error envelope:

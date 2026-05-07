@@ -5,7 +5,6 @@ import io
 import json
 from dataclasses import asdict
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Header, UploadFile
 
@@ -17,8 +16,16 @@ from plotter_signature.domain.contracts import (
     get_paper_size_mm,
     parse_paper,
 )
-from plotter_signature.infrastructure.security.api_key_auth import validate_api_key
+from plotter_signature.infrastructure.security.api_key_auth import is_api_key_required, validate_api_key
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
+
+
+def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
+    payload = asdict(provider.printer_service.get_status())
+    payload.pop("port_name", None)
+    payload.pop("is_open", None)
+    payload["printer_connected"] = provider.printer_service.is_open
+    return payload
 
 
 def _print_request_form(
@@ -46,12 +53,20 @@ def _print_request_form(
 
 
 def _ensure_connected(provider: ServiceProvider) -> None:
-    if not provider.printer_service.is_open:
-        raise HTTPException(status_code=400, detail="Printer is not connected. Call POST /printer/connect first.")
+    try:
+        provider.printer_service.ensure_serial_ready()
+    except RuntimeError as ex:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Printer is not connected. Ensure the server process has opened the serial port "
+                "(startup autoconnect / deployment configuration)."
+            ),
+        ) from ex
 
 
 def _ensure_not_busy(provider: ServiceProvider) -> None:
-    if provider.printer_service.is_printing:
+    if provider.printer_service.is_busy:
         raise HTTPException(status_code=409, detail="Printer is busy.")
 
 
@@ -94,11 +109,11 @@ def _parse_print_with_approval_request(raw_json: str) -> PrintWithApprovalReques
 
 
 def _require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
+    if not is_api_key_required():
+        return
     validation = validate_api_key(x_api_key)
     if validation.is_valid:
         return
-    if not validation.is_server_configured:
-        raise HTTPException(status_code=503, detail=validation.message)
     raise HTTPException(status_code=401, detail=validation.message)
 
 
@@ -106,36 +121,9 @@ def create_printer_router(provider: ServiceProvider | None = None) -> APIRouter:
     provider = provider or get_service_provider()
     router = APIRouter(prefix="/printer", tags=["printer"], dependencies=[Depends(_require_api_key)])
 
-    @router.post("/connect")
-    async def connect(com_port: str | None = None, baud_rate: int | None = None):
-        if provider.printer_service.is_open:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Already connected to {provider.printer_service.port_name}. Disconnect first.",
-            )
-        port = com_port or provider.printer_service.default_com_port
-        baud = baud_rate or provider.printer_service.default_baud_rate
-
-        try:
-            provider.printer_service.open_port(port, baud)
-        except Exception as ex:
-            raise HTTPException(status_code=400, detail=f"Failed to connect: {ex}") from ex
-
-        return {"message": f"Connected to {port} at {baud} baud."}
-
-    @router.post("/disconnect")
-    async def disconnect():
-        if not provider.printer_service.is_open:
-            raise HTTPException(status_code=409, detail="Not connected.")
-        if provider.printer_service.is_printing:
-            raise HTTPException(status_code=409, detail="Cannot disconnect while printing.")
-
-        provider.printer_service.close_port()
-        return {"message": "Disconnected."}
-
     @router.get("/status")
     async def get_status():
-        return asdict(provider.printer_service.get_status())
+        return _printer_status_public_dict(provider)
 
     @router.post("/generate")
     async def generate(svg: UploadFile = File(...), req: PrintRequest = Depends(_print_request_form)):
@@ -228,12 +216,4 @@ def create_printer_router(provider: ServiceProvider | None = None) -> APIRouter:
         except Exception as ex:
             raise HTTPException(status_code=500, detail=f"Error: {ex}") from ex
 
-    @router.get("/requests/{request_id}")
-    async def get_request_log(request_id: UUID):
-        log = await provider.print_approval_service.get_request_log_async(request_id)
-        if log is None:
-            raise HTTPException(status_code=404, detail=f"Request log with ID {request_id} not found.")
-        return log.to_dict()
-
     return router
-
