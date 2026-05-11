@@ -334,12 +334,10 @@ class PrinterService(IPrinterService):
             self._end_print_job()
 
     async def bulk_print(self, gcode: list[str], copies: int) -> PrintResponse:
-        self._begin_print_job()
+        self._begin_bulk_print_job(copies)
         total_commands = 0
         total_executed_distance = 0.0
         svg_total_distance = self.calculate_svg_distance_mm(gcode)
-        self._bulk_requested_total = copies
-        self._bulk_printed_count = 0
         try:
             def run() -> None:
                 nonlocal total_commands, total_executed_distance
@@ -453,6 +451,19 @@ class PrinterService(IPrinterService):
 
     def _begin_print_job(self) -> None:
         self._begin_busy("print")
+
+    def _begin_bulk_print_job(self, copies: int) -> None:
+        """Like _begin_print_job but sets bulk totals atomically (avoids stop_bulk racing on _bulk_requested_total)."""
+        with self._print_lock:
+            if self._busy_kind != "idle":
+                raise RuntimeError("Printer is busy.")
+            self._busy_kind = "print"
+            self._stop_requested.clear()
+            self._bulk_graceful_stop_requested.clear()
+            self._bulk_requested_total = copies
+            self._bulk_printed_count = 0
+            self._current_svg_total_distance_mm = 0.0
+            self._current_executed_distance_mm = 0.0
 
     def _end_print_job(self) -> None:
         self._end_busy()

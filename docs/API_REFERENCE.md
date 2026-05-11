@@ -520,9 +520,10 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 **Success `data`**
 
 
-| Field    | Type     | Description                                                                       |
-| -------- | -------- | --------------------------------------------------------------------------------- |
-| `status` | `object` | Full `PrinterStatus` (same fields as `[GET /api/cmd/status](#get-apicmdstatus)`). |
+| Field        | Type     | Description                                                                       |
+| ------------ | -------- | --------------------------------------------------------------------------------- |
+| `jobStopped` | `boolean`| Always `true` when stop was accepted (history side effect).                        |
+| `status`     | `object` | Full `PrinterStatus` (same fields as `[GET /api/cmd/status](#get-apicmdstatus)`). |
 
 
 Side effects: requests **graceful** bulk stop (current copy runs to completion and ejects; further copies are not started). For **immediate** mid-copy cancel during bulk, use [`POST /api/cmd/void`](#post-apicmdvoid) while printing. Marks active history job `stopped`, clears uploaded SVG.
@@ -543,6 +544,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
   "success": true,
   "message": "Bulk stop requested. The current copy will finish; remaining copies will not start.",
   "data": {
+    "jobStopped": true,
     "status": {
       "is_printing": true,
       "bulk_requested_total": 10,

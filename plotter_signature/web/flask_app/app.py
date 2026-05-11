@@ -1235,6 +1235,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
 
         data = _apply_print_stop_side_effects()
+        data["status"] = _printer_status_public_dict(provider)
 
         return api_success(
             message="Bulk stop requested. The current copy will finish; remaining copies will not start.",
