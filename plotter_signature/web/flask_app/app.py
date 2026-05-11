@@ -1237,7 +1237,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         data = _apply_print_stop_side_effects()
 
         return api_success(
-            message="Bulk stop requested.",
+            message="Bulk stop requested. The current copy will finish; remaining copies will not start.",
             data=data,
         )
 

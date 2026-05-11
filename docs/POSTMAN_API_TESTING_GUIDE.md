@@ -93,7 +93,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
 | POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required); optional `printRequestJson` or JSON / form print settings | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, slim `result` (see [API_REFERENCE](API_REFERENCE.md#post-apicmdprint)). 202: `queued: true`, `jobId`, `queuePosition`, … |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `bulkProgress`; no top-level `copies` on 200; `result` is slim bulk summary |
-| POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — cooperative bulk cancel |
+| POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — graceful bulk stop after current copy |
 | POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Idle: `data` is `{}` (use `message`). Busy: `{ "status": … }` |
 
 ### Common command error codes (non-exhaustive)

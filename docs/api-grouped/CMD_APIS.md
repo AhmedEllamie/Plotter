@@ -105,7 +105,7 @@ Send multipart form: `svg`, `copies` (1–100), and `printRequestJson` (optional
 ## `POST /api/cmd/bulk/stop`
 
 ### Description
-Requests cooperative stop for an active bulk print. Clears any stored uploaded SVG on the server so the next job must upload again.
+Requests **graceful** stop for an active **bulk** print: the **current copy** finishes (full eject), then no further copies are started. Clears any stored uploaded SVG on the server so the next job must upload again. For **immediate** cancel mid-copy (including during bulk), use `POST /api/cmd/void` while the printer is busy.
 
 ### How to use
 Call from UI stop button while bulk operation is running.
@@ -125,7 +125,7 @@ Call from UI stop button while bulk operation is running.
 ## `POST /api/cmd/void`
 
 ### Description
-When the printer is **idle**, runs the void/eject-safe printer sequence without drawing. When the printer is **busy** (active print or bulk job), requests the same in-job **cancel** as `POST /api/cmd/bulk/stop`: the firmware path stops between G-code lines, runs the normal eject in the print cycle `finally`, and the next job can start. Does **not** start a second serial “void” cycle on top of an in-flight job.
+When the printer is **idle**, runs the void/eject-safe printer sequence without drawing. When the printer is **busy** (single print or bulk job), requests **immediate** in-job **cancel**: the firmware path stops between G-code lines, runs the normal eject in the print cycle `finally`, and the next job can start. This is **stronger** than `POST /api/cmd/bulk/stop`, which only stops **after** the current bulk copy. Does **not** start a second serial “void” cycle on top of an in-flight job.
 
 **Note:** Pen-change operations also mark the printer busy; cancel is requested but those command paths may not honor the stop flag until supported.
 

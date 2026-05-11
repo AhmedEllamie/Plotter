@@ -525,6 +525,9 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
 ## Pre-Security Behavior
 - Authentication: Not required (before API key enforcement was added).
 
+## Behavior
+- Graceful: current bulk **copy** finishes; further copies are not started. Immediate mid-copy cancel: `POST /api/cmd/void` while busy.
+
 ## What It Takes
 - None
 

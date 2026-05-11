@@ -52,6 +52,7 @@ class PrinterService(IPrinterService):
         self._current_svg_total_distance_mm = 0.0
         self._current_executed_distance_mm = 0.0
         self._stop_requested = threading.Event()
+        self._bulk_graceful_stop_requested = threading.Event()
         self._bulk_requested_total = 0
         self._bulk_printed_count = 0
         self._serial_lock = threading.RLock()
@@ -282,7 +283,8 @@ class PrinterService(IPrinterService):
             is_printing=self.is_printing,
             bulk_requested_total=self._bulk_requested_total,
             bulk_printed_count=self._bulk_printed_count,
-            bulk_stop_requested=self._stop_requested.is_set(),
+            bulk_stop_requested=self._bulk_graceful_stop_requested.is_set()
+            or (self._bulk_requested_total > 0 and self._stop_requested.is_set()),
             current_svg_total_distance_mm=round(self._current_svg_total_distance_mm, 3),
             current_executed_distance_mm=round(self._current_executed_distance_mm, 3),
             current_execution_percent=current_percent,
@@ -342,6 +344,8 @@ class PrinterService(IPrinterService):
             def run() -> None:
                 nonlocal total_commands, total_executed_distance
                 for _ in range(copies):
+                    if self._bulk_graceful_stop_requested.is_set():
+                        break
                     if self._stop_requested.is_set():
                         break
                     try:
@@ -358,13 +362,17 @@ class PrinterService(IPrinterService):
             await asyncio.to_thread(run)
             self._add_to_cumulative_distance(total_executed_distance)
             printed_copies = self._bulk_printed_count
-            stopped = self._stop_requested.is_set() and printed_copies < copies
+            graceful_pending = self._bulk_graceful_stop_requested.is_set()
+            immediate_pending = self._stop_requested.is_set()
+            stopped = printed_copies < copies and (graceful_pending or immediate_pending)
             if stopped:
                 total_svg_distance = svg_total_distance * copies
             else:
                 total_svg_distance = svg_total_distance * printed_copies
             if self._stop_requested.is_set():
                 self._stop_requested.clear()
+            if self._bulk_graceful_stop_requested.is_set():
+                self._bulk_graceful_stop_requested.clear()
             return PrintResponse(
                 message="Bulk print stopped by user." if stopped else "Bulk print complete.",
                 copies=printed_copies,
@@ -396,7 +404,13 @@ class PrinterService(IPrinterService):
             return True
 
     def stop_bulk_print(self) -> bool:
-        return self.request_print_cancel()
+        with self._print_lock:
+            if self._busy_kind != "print":
+                return False
+            if self._bulk_requested_total <= 0:
+                return False
+            self._bulk_graceful_stop_requested.set()
+            return True
 
     async def pen_change_start(self) -> PrintResponse:
         self._begin_busy("pen_change")
@@ -431,6 +445,7 @@ class PrinterService(IPrinterService):
             self._busy_kind = kind
             if kind == "print":
                 self._stop_requested.clear()
+                self._bulk_graceful_stop_requested.clear()
                 self._bulk_requested_total = 0
                 self._bulk_printed_count = 0
                 self._current_svg_total_distance_mm = 0.0

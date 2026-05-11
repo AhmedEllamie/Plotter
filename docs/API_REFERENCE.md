@@ -276,7 +276,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 | `is_printing`                   | `boolean`        | `true` only during **print** or **bulk** jobs.                                                            |
 | `bulk_requested_total`          | `integer`        | Bulk job: total copies requested (last bulk job context).                                                 |
 | `bulk_printed_count`            | `integer`        | Bulk job: copies completed.                                                                               |
-| `bulk_stop_requested`           | `boolean`        | Cooperative cancel flag set.                                                                              |
+| `bulk_stop_requested`           | `boolean`        | Bulk graceful stop requested, or (while a bulk job is active) immediate cancel from void/emergency.      |
 | `current_svg_total_distance_mm` | `number`         | Total path length (mm) for current SVG context.                                                           |
 | `current_executed_distance_mm`  | `number`         | Pen-down distance executed (mm) for current job.                                                          |
 | `current_execution_percent`     | `number`         | 0–100 progress for current execution.                                                                     |
@@ -525,7 +525,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 | `status` | `object` | Full `PrinterStatus` (same fields as `[GET /api/cmd/status](#get-apicmdstatus)`). |
 
 
-Side effects: sets cooperative cancel, marks active history job `stopped`, clears uploaded SVG.
+Side effects: requests **graceful** bulk stop (current copy runs to completion and ejects; further copies are not started). For **immediate** mid-copy cancel during bulk, use [`POST /api/cmd/void`](#post-apicmdvoid) while printing. Marks active history job `stopped`, clears uploaded SVG.
 
 **Example request**
 
@@ -541,7 +541,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
 ```json
 {
   "success": true,
-  "message": "Bulk stop requested.",
+  "message": "Bulk stop requested. The current copy will finish; remaining copies will not start.",
   "data": {
     "status": {
       "is_printing": true,
@@ -608,7 +608,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
       "is_printing": true,
       "bulk_requested_total": 0,
       "bulk_printed_count": 0,
-      "bulk_stop_requested": true,
+      "bulk_stop_requested": false,
       "current_svg_total_distance_mm": 156.32,
       "current_executed_distance_mm": 45.2,
       "current_execution_percent": 28.9,
@@ -622,6 +622,8 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
   "details": null
 }
 ```
+
+For this **single-print** example, `bulk_stop_requested` is false; if void is used during an **active bulk** job (`bulk_requested_total` > 0), `bulk_stop_requested` in status is true until the job handles the cancel.
 
 ---
 

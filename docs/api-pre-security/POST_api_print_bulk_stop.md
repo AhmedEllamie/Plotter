@@ -3,6 +3,9 @@
 ## Pre-Security Behavior
 - Authentication: Not required (before API key enforcement was added).
 
+## Behavior
+- Graceful bulk stop: the **current copy** completes (including eject); remaining copies are not started. For **immediate** mid-copy cancel during bulk, use void while busy (`POST /api/cmd/void`).
+
 ## What It Takes
 - None
 

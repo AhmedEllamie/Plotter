@@ -219,8 +219,8 @@ For each print cycle:
 
 - `bulk_print(gcode, copies)` loops print cycles
 - `copies` constrained to 1..100 in API/CLI layer
-- stop request via `stop_bulk_print()` sets an event checked during execution
-- returns partial completion if stopped
+- stop request via `stop_bulk_print()` sets a **graceful** flag: the **current copy** completes; the loop checks the flag **between** copies. Immediate cancel still uses `request_print_cancel()` (`_stop_requested`), e.g. void while printing.
+- returns partial completion if stopped early
 
 ### 7.4 Void Print
 
