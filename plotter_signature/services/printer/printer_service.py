@@ -25,6 +25,10 @@ AUTCONNECT_PROBE_CAP = 32
 
 logger = logging.getLogger(__name__)
 
+_SERIAL_IO_ERROR_TYPES: tuple[type[BaseException], ...] = (OSError,)
+if serial is not None:
+    _SERIAL_IO_ERROR_TYPES = (OSError, serial.SerialException)
+
 
 class AutoConnectFailedError(RuntimeError):
     def __init__(self, message: str, *, attempted_ports: list[str]) -> None:
@@ -165,6 +169,13 @@ class PrinterService(IPrinterService):
         if self._port and self._port.is_open:
             self._port.close()
         self._port = None
+
+    def _invalidate_serial_after_io_error(self, exc: BaseException) -> None:
+        if not isinstance(exc, _SERIAL_IO_ERROR_TYPES):
+            return
+        logger.warning("Serial I/O error; closing port: %s", exc)
+        with self._serial_lock:
+            self._close_port_unlocked()
 
     @staticmethod
     def list_filtered_serial_device_names() -> list[str]:
@@ -519,56 +530,58 @@ class PrinterService(IPrinterService):
 
     def _eject_paper(self) -> None:
         print("  Ejecting: Pen up...")
-        self._send_safe("G1 E0.0 F4000")
+        self._send_safe("G1 E0.0 F4000", respect_stop=False)
 
         print("  Ejecting: Move X to 215...")
-        self._send_safe("G0 X215.0 F6000.0")
+        self._send_safe("G0 X215.0 F6000.0", respect_stop=False)
 
         print("  Ejecting: Start motor (M106)...")
-        self._send_safe("M106")
+        self._send_safe("M106", respect_stop=False)
 
         print("  Ejecting: Push paper Y500...")
-        self._send_safe("G0 Y500.0 F6000.0")
+        self._send_safe("G0 Y500.0 F6000.0", respect_stop=False)
 
         print("  Ejecting: Wait (M400)...")
-        self._send_safe("M400")
+        self._send_safe("M400", respect_stop=False)
 
         print("  Ejecting: Stop motor (M107)...")
-        self._send_safe("M107")
+        self._send_safe("M107", respect_stop=False)
 
         print("Eject complete")
 
-    def _send(self, gcode: str) -> None:
+    def _send(self, gcode: str, *, respect_stop: bool = True) -> None:
         self._ensure_port_open()
         payload = (gcode + "\n").encode("ascii", errors="ignore")
-        self._port.write(payload)
-        self._wait_for_ok()
-
-    def _send_safe(self, gcode: str) -> None:
         try:
-            self._send(gcode)
+            self._port.write(payload)
+        except BaseException as ex:
+            self._invalidate_serial_after_io_error(ex)
+            raise
+        self._wait_for_ok(respect_stop=respect_stop)
+
+    def _send_safe(self, gcode: str, *, respect_stop: bool = True) -> None:
+        try:
+            self._send(gcode, respect_stop=respect_stop)
         except Exception:
             # Keep eject cycle resilient even if one command fails.
             pass
 
-    def _wait_for_ok(self, timeout_seconds: int = 10) -> None:
+    def _wait_for_ok(self, timeout_seconds: int = 10, *, respect_stop: bool = True) -> None:
         start = time.time()
         buffer = ""
 
         while True:
-            self._throw_if_stop_requested()
+            if respect_stop:
+                self._throw_if_stop_requested()
             if time.time() - start > timeout_seconds:
                 # Keep parity with C# behavior: timeout does not fail the job.
                 return
 
-            try:
-                data = self._read_existing()
-                if data:
-                    buffer += data
-                    if "ok" in buffer.lower():
-                        return
-            except Exception:
-                pass
+            data = self._read_existing()
+            if data:
+                buffer += data
+                if "ok" in buffer.lower():
+                    return
 
             time.sleep(0.005)
 
@@ -582,14 +595,11 @@ class PrinterService(IPrinterService):
             if time.time() - start > timeout_seconds:
                 raise TimeoutError(f"Timeout waiting for '{expected}'.")
 
-            try:
-                data = self._read_existing()
-                if data:
-                    buffer += data
-                    if expected_lower in buffer.lower():
-                        return
-            except Exception:
-                pass
+            data = self._read_existing()
+            if data:
+                buffer += data
+                if expected_lower in buffer.lower():
+                    return
 
             time.sleep(0.01)
 
@@ -598,7 +608,11 @@ class PrinterService(IPrinterService):
         waiting = getattr(self._port, "in_waiting", 0)
         if waiting <= 0:
             return ""
-        raw = self._port.read(waiting)
+        try:
+            raw = self._port.read(waiting)
+        except BaseException as ex:
+            self._invalidate_serial_after_io_error(ex)
+            raise
         if not raw:
             return ""
         return raw.decode("ascii", errors="ignore")
