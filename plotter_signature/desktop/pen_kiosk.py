@@ -187,14 +187,6 @@ class PenKioskApp:
         self._apply_active_card()
 
     def _build_status_card(self, parent: Frame) -> None:
-        Label(
-            parent,
-            text="Status",
-            bg="#111827",
-            fg="#f8fafc",
-            font=("Segoe UI", 18, "bold"),
-        ).pack(anchor="w", pady=(0, 12))
-
         info_panel = self._status_section(parent, "Info")
         ip_row = Frame(info_panel, bg="#1e293b")
         ip_row.pack(fill=X, pady=4)
