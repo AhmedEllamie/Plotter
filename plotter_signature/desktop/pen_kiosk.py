@@ -86,6 +86,11 @@ def _read_plotter_api_key_from_file(path: str) -> str:
 
 
 class PenKioskApp:
+    _INFO_FG_OK = "#a7f3d0"
+    _INFO_FG_BAD = "#fecaca"
+    _INFO_FG_WARN = "#fde68a"
+    _INFO_FG_MUTED = "#94a3b8"
+
     def __init__(self, api_base_url: str | None = None) -> None:
         saved = _load_kiosk_settings()
         default_base = (os.getenv("PLOTTER_KIOSK_API_BASE") or "http://127.0.0.1:5001").strip()
@@ -103,7 +108,6 @@ class PenKioskApp:
         self._plotter_connected = False
 
         self._current_ip_var = StringVar(value="Resolving…")
-        self._link_detail_var = StringVar(value="Checking…")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
         self._execution_percent_value = StringVar(value="0.00%")
@@ -114,19 +118,18 @@ class PenKioskApp:
         self._inline_error_var = StringVar(value="")
         self._api_feedback_code_var = StringVar(value="")
         self._api_feedback_message_var = StringVar(value="")
+        self._error_code_label: Label | None = None
         self._api_feedback_message_label: Label | None = None
+        self._info_server_label: Label | None = None
+        self._info_plotter_label: Label | None = None
+        self._info_state_label: Label | None = None
 
         self._mode_label_var = StringVar(value="Status")
-        self._plotter_badge_label: Label | None = None
-        self._busy_badge_label: Label | None = None
-        self._server_badge_label: Label | None = None
         self._status_card: Frame | None = None
         self._change_pen_card: Frame | None = None
         self._active_card_idx = 0
         self._switch_canvas: Canvas | None = None
         self._switch_knob: int | None = None
-        self._link_lamp_canvas: Canvas | None = None
-        self._link_lamp_oval: int | None = None
 
         self._build_ui()
 
@@ -190,93 +193,100 @@ class PenKioskApp:
             bg="#111827",
             fg="#f8fafc",
             font=("Segoe UI", 18, "bold"),
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, 12))
 
+        info_panel = self._status_section(parent, "Info")
+        ip_row = Frame(info_panel, bg="#1e293b")
+        ip_row.pack(fill=X, pady=4)
         Label(
-            parent,
-            text="Current IP (this machine)",
-            bg="#111827",
+            ip_row,
+            text="Printer IP",
+            bg="#1e293b",
             fg="#94a3b8",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w")
-        Label(
-            parent,
-            textvariable=self._current_ip_var,
-            bg="#111827",
-            fg="#f8fafc",
-            font=("Segoe UI", 13, "bold"),
-            justify="left",
-            wraplength=720,
-        ).pack(anchor="w", pady=(2, 6))
-
-        link_row = Frame(parent, bg="#111827")
-        link_row.pack(fill=X, pady=(10, 12))
-        self._link_lamp_canvas = Canvas(
-            link_row, width=48, height=44, bg="#111827", highlightthickness=0, bd=0
-        )
-        self._link_lamp_canvas.pack(side=LEFT)
-        self._link_lamp_oval = self._link_lamp_canvas.create_oval(
-            10, 6, 38, 34, fill="#64748b", outline="#475569", width=2
-        )
-        lbl_col = Frame(link_row, bg="#111827")
-        lbl_col.pack(side=LEFT, padx=(10, 0))
-        Label(
-            lbl_col,
-            textvariable=self._link_detail_var,
-            bg="#111827",
-            fg="#e2e8f0",
-            font=("Segoe UI", 13, "bold"),
-        ).pack(anchor="w")
-
-        badges_row = Frame(parent, bg="#111827")
-        badges_row.pack(fill=X, pady=(0, 10))
-        self._server_badge_label = self._badge(badges_row, ok=False)
-        self._server_badge_label.pack(side=LEFT, padx=(0, 8))
-        self._plotter_badge_label = self._badge(badges_row, ok=False)
-        self._plotter_badge_label.pack(side=LEFT, padx=(0, 8))
-        self._busy_badge_label = self._badge(badges_row, ok=True)
-        self._busy_badge_label.pack(side=LEFT)
-
-        Label(
-            parent,
-            text="Last API error",
-            bg="#111827",
-            fg="#94a3b8",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", pady=(8, 2))
-        code_row = Frame(parent, bg="#111827")
-        code_row.pack(fill=X, pady=(0, 2))
-        Label(
-            code_row,
-            text="Code",
-            bg="#111827",
-            fg="#94a3b8",
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 12, "bold"),
         ).pack(side=LEFT)
         Label(
-            code_row,
-            textvariable=self._api_feedback_code_var,
-            bg="#111827",
-            fg="#fecaca",
+            ip_row,
+            textvariable=self._current_ip_var,
+            bg="#1e293b",
+            fg="#f8fafc",
             font=("Segoe UI", 12, "bold"),
-        ).pack(side=RIGHT)
-        self._api_feedback_message_label = Label(
-            parent,
-            textvariable=self._api_feedback_message_var,
+            justify="left",
+            wraplength=520,
+        ).pack(side=RIGHT, fill=X, expand=True)
+
+        self._info_server_label = self._status_key_value_row(info_panel, "Server")
+        self._info_plotter_label = self._status_key_value_row(info_panel, "Plotter")
+        self._info_state_label = self._status_key_value_row(info_panel, "State")
+
+        meters_panel = self._status_section(parent, "Meters & progress")
+        self._metric_row(meters_panel, "Cumulative distance (m)", self._cumulative_distance_value, bg="#1e293b")
+        self._metric_row(meters_panel, "Executed distance (m)", self._executed_distance_value, bg="#1e293b")
+        self._metric_row(meters_panel, "Execution progress", self._execution_percent_value, bg="#1e293b")
+        self._metric_row(meters_panel, "Pen remaining", self._pen_remaining_value, bg="#1e293b")
+        self._metric_row(meters_panel, "Bulk progress", self._bulk_progress_value, bg="#1e293b")
+        self._metric_row(meters_panel, "Bulk stop requested", self._bulk_stop_value, bg="#1e293b")
+
+        errors_panel = self._status_section(parent, "Errors")
+        self._error_code_label = self._status_key_value_row(errors_panel, "Error code")
+        self._api_feedback_message_label = self._status_message_row(errors_panel, "Error message")
+
+    def _status_section(self, parent: Frame, title: str) -> Frame:
+        block = Frame(parent, bg="#111827")
+        block.pack(fill=X, pady=(0, 16))
+        Label(
+            block,
+            text=title,
             bg="#111827",
-            fg="#fecaca",
+            fg="#94a3b8",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 8))
+        inner = Frame(block, bg="#1e293b", padx=18, pady=14)
+        inner.pack(fill=X)
+        return inner
+
+    def _status_key_value_row(self, parent: Frame, key: str) -> Label:
+        row = Frame(parent, bg="#1e293b")
+        row.pack(fill=X, pady=4)
+        Label(
+            row,
+            text=key,
+            bg="#1e293b",
+            fg="#94a3b8",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(side=LEFT)
+        value = Label(
+            row,
+            text="—",
+            bg="#1e293b",
+            fg="#f8fafc",
+            font=("Segoe UI", 12, "bold"),
+            justify="right",
+        )
+        value.pack(side=RIGHT)
+        return value
+
+    def _status_message_row(self, parent: Frame, key: str) -> Label:
+        block = Frame(parent, bg="#1e293b")
+        block.pack(fill=X, pady=(6, 0))
+        Label(
+            block,
+            text=key,
+            bg="#1e293b",
+            fg="#94a3b8",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+        value = Label(
+            block,
+            text="—",
+            bg="#1e293b",
+            fg="#64748b",
             font=("Segoe UI", 12),
             justify="left",
             wraplength=720,
         )
-        self._api_feedback_message_label.pack(anchor="w", pady=(0, 8))
-
-        self._metric_row(parent, "Cumulative distance", self._cumulative_distance_value)
-        self._metric_row(parent, "Executed distance", self._executed_distance_value)
-        self._metric_row(parent, "Execution progress", self._execution_percent_value)
-        self._metric_row(parent, "Pen remaining", self._pen_remaining_value)
-        self._metric_row(parent, "Bulk progress", self._bulk_progress_value)
-        self._metric_row(parent, "Bulk stop requested", self._bulk_stop_value)
+        value.pack(anchor="w", pady=(4, 0))
+        return value
 
     def _build_change_pen_card(self, parent: Frame) -> None:
         Label(
@@ -376,31 +386,20 @@ class PenKioskApp:
             cursor="hand2",
         ).pack(fill=X, pady=(2, 0))
 
-    def _badge(self, parent: Frame, *, ok: bool) -> Label:
-        return Label(
-            parent,
-            text="",
-            bg="#14532d" if ok else "#7f1d1d",
-            fg="#dcfce7" if ok else "#fee2e2",
-            font=("Segoe UI", 11, "bold"),
-            padx=12,
-            pady=4,
-        )
-
-    def _metric_row(self, parent: Frame, key: str, value: StringVar) -> None:
-        row = Frame(parent, bg="#111827")
+    def _metric_row(self, parent: Frame, key: str, value: StringVar, *, bg: str = "#111827") -> None:
+        row = Frame(parent, bg=bg)
         row.pack(fill=X, pady=3)
         Label(
             row,
             text=key,
-            bg="#111827",
+            bg=bg,
             fg="#94a3b8",
             font=("Segoe UI", 12, "bold"),
         ).pack(side=LEFT)
         Label(
             row,
             textvariable=value,
-            bg="#111827",
+            bg=bg,
             fg="#f8fafc",
             font=("Segoe UI", 12, "bold"),
         ).pack(side=RIGHT)
@@ -447,22 +446,18 @@ class PenKioskApp:
         current = bool(self._root.attributes("-fullscreen"))
         self._root.attributes("-fullscreen", not current)
 
-    def _set_link_lamp(self, ok: bool) -> None:
-        if self._link_lamp_canvas is None or self._link_lamp_oval is None:
+    def _set_key_value_cell(self, label: Label | None, text: str, fg: str) -> None:
+        if label is None:
             return
-        if ok:
-            fill, outline = "#22c55e", "#15803d"
-        else:
-            fill, outline = "#ef4444", "#b91c1c"
-        self._link_lamp_canvas.itemconfig(self._link_lamp_oval, fill=fill, outline=outline)
+        label.configure(text=text, fg=fg)
 
-    def _update_link_detail_line(self) -> None:
-        http = "OK" if self._http_ok else "unreachable"
-        if not self._http_ok:
-            pc = "—"
-        else:
-            pc = "connected" if self._plotter_connected else "disconnected"
-        self._link_detail_var.set(f"API: {http} | Serial on server: {pc}")
+    def _clear_error_panel(self) -> None:
+        self._api_feedback_code_var.set("")
+        self._api_feedback_message_var.set("")
+        if self._error_code_label is not None:
+            self._error_code_label.configure(text="—", fg="#64748b")
+        if self._api_feedback_message_label is not None:
+            self._api_feedback_message_label.configure(text="—", fg="#64748b")
 
     def _refresh_status_now(self) -> None:
         try:
@@ -471,15 +466,18 @@ class PenKioskApp:
             self._plotter_connected = bool(status.get("printer_connected"))
             is_busy = bool(status.get("is_busy") or status.get("is_printing"))
 
-            self._set_badge_color(self._server_badge_label, "Server: OK", True)
-            self._set_badge_color(
-                self._plotter_badge_label,
-                "Plotter: Connected" if self._plotter_connected else "Plotter: Disconnected",
-                self._plotter_connected,
+            ok_fg, bad_fg, warn_fg = self._INFO_FG_OK, self._INFO_FG_BAD, self._INFO_FG_WARN
+            self._set_key_value_cell(self._info_server_label, "OK", ok_fg)
+            self._set_key_value_cell(
+                self._info_plotter_label,
+                "Connected" if self._plotter_connected else "Disconnected",
+                ok_fg if self._plotter_connected else bad_fg,
             )
-            self._set_badge_color(self._busy_badge_label, "Busy" if is_busy else "Idle", not is_busy)
-
-            self._set_link_lamp(self._http_ok and self._plotter_connected)
+            self._set_key_value_cell(
+                self._info_state_label,
+                "Busy" if is_busy else "Idle",
+                warn_fg if is_busy else ok_fg,
+            )
 
             self._cumulative_distance_value.set(self._format_meters_from_mm(status.get("cumulative_distance_mm")))
             self._executed_distance_value.set(self._format_meters_from_mm(status.get("current_executed_distance_mm")))
@@ -506,32 +504,33 @@ class PenKioskApp:
                     code_str = str(lc)
                 self._append_feedback(str(lm), is_error=True, error_code=code_str)
             else:
-                self._api_feedback_code_var.set("")
-                self._api_feedback_message_var.set("")
+                self._clear_error_panel()
         except HTTPError as ex:
             self._http_ok = False
             self._plotter_connected = False
-            self._set_badge_color(self._server_badge_label, f"Server: HTTP {ex.code}", False)
-            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
-            self._set_link_lamp(False)
+            bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
+            self._set_key_value_cell(self._info_server_label, f"HTTP {ex.code}", bad_fg)
+            self._set_key_value_cell(self._info_plotter_label, "—", muted_fg)
+            self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             code, msg = self._decode_http_error(ex)
             self._append_feedback(msg or f"Status HTTP error: {ex.code}", is_error=True, error_code=code)
         except URLError as ex:
             self._http_ok = False
             self._plotter_connected = False
-            self._set_badge_color(self._server_badge_label, "Server: unreachable", False)
-            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
-            self._set_link_lamp(False)
+            bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
+            self._set_key_value_cell(self._info_server_label, "unreachable", bad_fg)
+            self._set_key_value_cell(self._info_plotter_label, "—", muted_fg)
+            self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             self._append_feedback(f"Status network error: {ex.reason}", is_error=True)
         except Exception as ex:
             self._http_ok = False
             self._plotter_connected = False
-            self._set_badge_color(self._server_badge_label, "Server: error", False)
-            self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
-            self._set_link_lamp(False)
+            bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
+            self._set_key_value_cell(self._info_server_label, "error", bad_fg)
+            self._set_key_value_cell(self._info_plotter_label, "—", muted_fg)
+            self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             self._append_feedback(f"Status error: {ex}", is_error=True)
 
-        self._update_link_detail_line()
         self._current_ip_var.set(_local_ipv4s_for_display())
 
     @staticmethod
@@ -648,16 +647,23 @@ class PenKioskApp:
 
     def _append_feedback(self, message: str, is_error: bool = False, error_code: str | None = None) -> None:
         trimmed = (message or "").strip()[:800]
-        if is_error:
-            self._api_feedback_code_var.set((error_code or "").strip())
-            self._api_feedback_message_var.set(trimmed)
-            if self._api_feedback_message_label is not None:
-                self._api_feedback_message_label.configure(fg="#fecaca")
-            return
-        self._api_feedback_code_var.set("")
+        code_plain = (error_code or "").strip() if is_error else ""
+        self._api_feedback_code_var.set(code_plain)
         self._api_feedback_message_var.set(trimmed)
+
+        if self._error_code_label is not None:
+            code_display = code_plain if code_plain else "—"
+            self._error_code_label.configure(
+                text=code_display,
+                fg="#fecaca" if is_error and code_plain else "#64748b",
+            )
+
         if self._api_feedback_message_label is not None:
-            self._api_feedback_message_label.configure(fg="#86efac")
+            msg_display = trimmed if trimmed else "—"
+            if is_error:
+                self._api_feedback_message_label.configure(text=msg_display, fg="#fecaca")
+            else:
+                self._api_feedback_message_label.configure(text=msg_display, fg="#86efac" if trimmed else "#64748b")
 
     def _set_max_pen_distance(self) -> None:
         raw_value = self._max_pen_distance_var.get().strip()
@@ -717,15 +723,6 @@ class PenKioskApp:
                 self._api_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _set_badge_color(self, label: Label | None, text: str, ok_color: bool) -> None:
-        if label is None:
-            return
-        label.configure(
-            text=text,
-            bg="#14532d" if ok_color else "#7f1d1d",
-            fg="#dcfce7" if ok_color else "#fee2e2",
-        )
 
     def _refresh_status(self) -> None:
         try:
