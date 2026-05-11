@@ -1375,21 +1375,21 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def pen_distance() -> tuple[Response, int]:
         payload = _get_json_dict() or request.form.to_dict(flat=True)
         reset_cumulative = parse_bool(payload.get("resetCumulative"), default=False)
-        raw_meters = payload.get("meters") or payload.get("maxPenDistanceM")
+        raw_meters = payload.get("meters")
         max_meters: float | None = None
         if raw_meters is not None and str(raw_meters).strip() != "":
             try:
                 max_meters = float(raw_meters)
             except (TypeError, ValueError):
                 return api_error(
-                    "meters (or maxPenDistanceM) must be a number.",
+                    "meters must be a number.",
                     error_code="PEN_MAX_DISTANCE_INVALID",
                     status_code=400,
                 )
 
         if not reset_cumulative and max_meters is None:
             return api_error(
-                "Provide resetCumulative: true and/or meters (or maxPenDistanceM).",
+                "Provide resetCumulative: true and/or meters.",
                 error_code="PEN_DISTANCE_NO_ACTION",
                 status_code=400,
             )

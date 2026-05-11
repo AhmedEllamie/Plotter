@@ -140,7 +140,7 @@ python -m plotter_signature.cli disconnect
 | POST | `/api/config/change-pen/start` | `{}` | 200 — `data` is `{}` (use `message`) |
 | POST | `/api/config/change-pen/finish` | `{}` | 200 — same |
 | POST | `/api/config/change-pen` | JSON `{"mode":"start"}` or `{"mode":"finish"}` | 200 — delegates to start/finish (`data` `{}`) |
-| POST | `/api/config/pen-distance` | `{"resetCumulative":true}`, `{"meters":2.75}`, both, or `resetCumulative`+`maxPenDistanceM` | 200 — slim `data`: `maxPenDistanceM`, `remainingPenPercent`, optional `cumulativeDistanceMm` after reset |
+| POST | `/api/config/pen-distance` | `{"resetCumulative":true}`, `{"meters":2.75}`, or both | 200 — slim `data`: `maxPenDistanceM`, `remainingPenPercent`, optional `cumulativeDistanceMm` after reset |
 
 ---
 

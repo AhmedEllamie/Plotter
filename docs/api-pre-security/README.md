@@ -25,7 +25,7 @@ These files describe historical **short** paths (e.g. `/api/health`). The live F
 - [POST /api/change-pen/finish](POST_api_change_pen_finish.md) → `POST /api/config/change-pen/finish`
 - [POST /api/change-pen](POST_api_change_pen.md) → `POST /api/config/change-pen`
 - [POST /api/reset](POST_api_reset.md) → **removed**; use `POST /api/config/pen-distance` with `resetCumulative`
-- [POST /api/pen-max-distance](POST_api_pen_max_distance.md) → **removed**; use `POST /api/config/pen-distance` with `meters` / `maxPenDistanceM`
+- [POST /api/pen-max-distance](POST_api_pen_max_distance.md) → **removed**; use `POST /api/config/pen-distance` with `meters`
 - **Pen distance:** live app **`POST /api/config/pen-distance`** (see `API_REFERENCE.md`)
 - [POST /api/scanner/capture-manual](POST_api_scanner_capture_manual.md) → `POST /api/config/scanner/capture-manual`
 - [POST /api/capture](POST_api_capture.md) → `POST /api/config/capture`

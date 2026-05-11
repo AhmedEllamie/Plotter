@@ -90,7 +90,7 @@ Pen change control endpoints (`start`, `finish`, or mode-based dispatcher).
 ### Description
 Pen maintenance endpoint: cumulative distance reset and/or max pen distance (meters). **`POST /api/config/reset`** and **`POST /api/config/pen-max-distance`** are **removed** — use this route only.
 ### How to use
-JSON or form: `resetCumulative` (boolean, default false), and/or `meters` or `maxPenDistanceM` (number &gt; 0). At least one action required or **`PEN_DISTANCE_NO_ACTION`** (`400`).
+JSON or form: `resetCumulative` (boolean, default false), and/or `meters` (number &gt; 0). At least one action required or **`PEN_DISTANCE_NO_ACTION`** (`400`).
 ### What it takes
 - Requires `X-API-Key`.
 ### Response

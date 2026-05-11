@@ -445,7 +445,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
 - Authentication: Not required (before API key enforcement was added).
 
 ## What It Takes
-- JSON/form: meters or maxPenDistanceM required
+- JSON/form: meters (number) for max pen distance
 
 ## Response
 - Success envelope (JSON APIs):
@@ -556,7 +556,7 @@ This document consolidates all /api/* endpoint docs before API key enforcement.
 - Authentication: Not required (before API key enforcement was added).
 
 ## What It Takes
-- Optional JSON: maxPenDistanceM (number). Legacy clearUploadedSvg ignored.
+- Optional JSON: `meters` (number). Legacy clearUploadedSvg ignored.
 
 ## Response
 - Success envelope (JSON APIs):

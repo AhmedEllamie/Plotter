@@ -1,12 +1,12 @@
 # POST /api/reset
 
-**Current server:** This path is **not** implemented. Use **`POST /api/config/pen-distance`** with `{"resetCumulative":true}` (and optional `maxPenDistanceM` / `meters`). Below is historical pre-security documentation only.
+**Current server:** This path is **not** implemented. Use **`POST /api/config/pen-distance`** with `{"resetCumulative":true}` (and optional `meters`). Below is historical pre-security documentation only.
 
 ## Pre-Security Behavior
 - Authentication: Not required (before API key enforcement was added).
 
 ## What It Takes
-- Optional JSON: **maxPenDistanceM** (number). Legacy **`clearUploadedSvg`** is ignored if sent.
+- Optional JSON: **`meters`** (number). Legacy **`clearUploadedSvg`** is ignored if sent.
 
 ## Response
 - Success envelope (JSON APIs):

@@ -119,7 +119,7 @@ Implementation: `[api_error_codes.py](../plotter-signature/plotter_signature/inf
 
 ### Last API error snapshot (`GET /api/cmd/status`)
 
-The server keeps a thread-safe **last API error** record (updated whenever any route returns an error through the shared `api_error` helper). Successful **mutating** responses (`POST`, `PUT`, `PATCH`, `DELETE`) clear this snapshot; `**GET`** and `**HEAD*`* success responses do **not** clear it, so operators can still see recent failures while polling status.
+The server keeps a thread-safe **last API error** record (updated whenever any route returns an error through the shared `api_error` helper). Successful **mutating** responses (`POST`, `PUT`, `PATCH`, `DELETE`) clear this snapshot; `**GET`** and `**HEAD`** success responses do **not** clear it, so operators can still see recent failures while polling status.
 
 The current snapshot is merged into `**GET /api/cmd/status`** success payload as:
 
@@ -133,18 +133,18 @@ The current snapshot is merged into `**GET /api/cmd/status`** success payload as
 
 These fields describe the **last recorded failure**, not an error in the status response itself (which remains `200` / `success: true` when the status call succeeds).
 
-### Authentication (all `/api/*` routes)
+### Authentication (all `/api/`* routes)
 
 
 | Location    | Name        | Type     | Required                                                     | Description                                                                                                                                                                                                      |
 | ----------- | ----------- | -------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HTTP header | `X-API-Key` | `string` | **Yes** for every `/api/*` route                             | Must match server `PLOTTER_API_KEY` or request returns **401**.                                                                                                                                                  |
+| HTTP header | `X-API-Key` | `string` | **Yes** for every `/api/`* route                             | Must match server `PLOTTER_API_KEY` or request returns **401**.                                                                                                                                                  |
 | Query       | `token`     | `string` | Alternative (**only** `GET /api/config/scanner/stream.mjpg`) | Must equal `**PLOTTER_STREAM_TOKEN`** if that env is non-empty, otherwise `**PLOTTER_API_KEY`**. Lets the configuration page use `<img src="...">`, which cannot send headers. **May appear in logs/referrers.** |
 
 
 `**PLOTTER_API_KEY` is mandatory.** Flask `create_app` raises `RuntimeError` and refuses to start if the variable is missing or blank. There is no anonymous / development bypass.
 
-All `/api/*` routes require a matching `**X-API-Key`** header, **except** the scanner stream which may also use the `**token`** query parameter as described above (missing or invalid → **401**).
+All `/api/`* routes require a matching `**X-API-Key`** header, **except** the scanner stream which may also use the `**token`** query parameter as described above (missing or invalid → **401**).
 
 
 | `errorCode` (numeric) | Legacy token   | HTTP | Meaning               |
@@ -188,7 +188,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 
 Expect `**200**`. A wrong or missing key returns `**401**`.
 
-1. **Update every client** — **Configuration → API Key**, kiosk env / `/etc/plotter-signature/plotter-signature.env` (or `PLOTTER_API_KEY_FILE`), and any integrations — so `**X-API-Key`** matches the server. For `**GET /api/config/scanner/stream.mjpg`**, use query `**token**` as documented, or set a separate `**PLOTTER_STREAM_TOKEN**` for the URL while keeping `**PLOTTER_API_KEY**` on normal `**fetch**` calls.
+1. **Update every client** — **Configuration → API Key**, kiosk env / `/etc/plotter-signature/plotter-signature.env` (or `PLOTTER_API_KEY_FILE`), and any integrations — so `**X-API-Key`** matches the server. For `**GET /api/config/scanner/stream.mjpg`**, use query `**token`** as documented, or set a separate `**PLOTTER_STREAM_TOKEN**` for the URL while keeping `**PLOTTER_API_KEY**` on normal `**fetch**` calls.
 
 ### Static HTML (no API key)
 
@@ -269,24 +269,24 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 **Success `data` object — public status (serial port name is not exposed; use `printer_connected` for link state)**
 
 
-| Field                           | Type      | Description                                                                                         |
-| ------------------------------- | --------- | --------------------------------------------------------------------------------------------------- |
-| `printer_connected`             | `boolean` | `true` if the **HTTP server** has the serial port open.                                             |
-| `is_busy`                       | `boolean` | `true` during print, bulk, void, or pen change.                                                     |
-| `is_printing`                   | `boolean` | `true` only during **print** or **bulk** jobs.                                                      |
-| `bulk_requested_total`          | `integer` | Bulk job: total copies requested (last bulk job context).                                           |
-| `bulk_printed_count`            | `integer` | Bulk job: fully completed copies plus **one** while a bulk copy is actively running (capped at `bulk_requested_total`). Single print / idle: use `0`. |
+| Field                           | Type      | Description                                                                                                                                                                                                                                   |
+| ------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `printer_connected`             | `boolean` | `true` if the **HTTP server** has the serial port open.                                                                                                                                                                                       |
+| `is_busy`                       | `boolean` | `true` during print, bulk, void, or pen change.                                                                                                                                                                                               |
+| `is_printing`                   | `boolean` | `true` only during **print** or **bulk** jobs.                                                                                                                                                                                                |
+| `bulk_requested_total`          | `integer` | Bulk job: total copies requested (last bulk job context).                                                                                                                                                                                     |
+| `bulk_printed_count`            | `integer` | Bulk job: fully completed copies plus **one** while a bulk copy is actively running (capped at `bulk_requested_total`). Single print / idle: use `0`.                                                                                         |
 | `bulk_stop_requested`           | `boolean` | Bulk graceful stop requested, or (while a bulk job is active) immediate cancel from void/emergency. May also reflect a recent `POST /api/cmd/bulk/stop` accepted by this process (use **one API worker** per machine so status matches stop). |
-| `current_svg_total_distance_mm` | `number`  | Total path length (mm) for current SVG context.                                                     |
-| `current_executed_distance_mm`  | `number`  | Pen-down distance executed (mm) for current job.                                                    |
-| `current_execution_percent`     | `number`  | 0–100 progress for current execution.                                                               |
-| `cumulative_distance_mm`        | `number`  | Lifetime pen distance (mm) persisted on disk.                                                       |
-| `max_pen_distance_m`            | `number`  | Configured max pen travel (meters).                                                                 |
-| `used_pen_distance_m`           | `number`  | `cumulative_distance_mm / 1000`.                                                                    |
-| `remaining_pen_percent`         | `number`  | Estimated remaining pen life (percent).                                                             |
-| `lastApiErrorCode`              | `integer  | null`                                                                                               |
-| `lastApiErrorMessage`           | `string   | null`                                                                                               |
-| `lastApiErrorAt`                | `string   | null`                                                                                               |
+| `current_svg_total_distance_mm` | `number`  | Total path length (mm) for current SVG context.                                                                                                                                                                                               |
+| `current_executed_distance_mm`  | `number`  | Pen-down distance executed (mm) for current job.                                                                                                                                                                                              |
+| `current_execution_percent`     | `number`  | 0–100 progress for current execution.                                                                                                                                                                                                         |
+| `cumulative_distance_mm`        | `number`  | Lifetime pen distance (mm) persisted on disk.                                                                                                                                                                                                 |
+| `max_pen_distance_m`            | `number`  | Configured max pen travel (meters).                                                                                                                                                                                                           |
+| `used_pen_distance_m`           | `number`  | `cumulative_distance_mm / 1000`.                                                                                                                                                                                                              |
+| `remaining_pen_percent`         | `number`  | Estimated remaining pen life (percent).                                                                                                                                                                                                       |
+| `lastApiErrorCode`              | `integer  | null`                                                                                                                                                                                                                                         |
+| `lastApiErrorMessage`           | `string   | null`                                                                                                                                                                                                                                         |
+| `lastApiErrorAt`                | `string   | null`                                                                                                                                                                                                                                         |
 
 
 **HTTP:** `200`
@@ -520,9 +520,9 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 **Success `data`**
 
 
-| Field        | Type      | Description                                                                                      |
-| ------------ | --------- | ------------------------------------------------------------------------------------------------ |
-| `jobStopped` | `boolean` | Always `true` when stop was accepted (history side effect).                                    |
+| Field        | Type      | Description                                                                                                                                                                                                                               |
+| ------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jobStopped` | `boolean` | Always `true` when stop was accepted (history side effect).                                                                                                                                                                               |
 | `status`     | `object`  | Slim snapshot (not full `GET /api/cmd/status`): `bulk_printed_count`, `bulk_requested_total`, `cumulative_distance_mm`, `current_svg_total_distance_mm`, `remaining_pen_percent`, `used_pen_distance_m` — same count semantics as status. |
 
 
@@ -592,34 +592,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
   "details": null
 }
 ```
-
-**Example response** `200` (busy — cancel requested)
-
-```json
-{
-  "success": true,
-  "message": "Current print job stop requested. The printer will eject and return to idle.",
-  "data": {
-    "status": {
-      "is_printing": true,
-      "bulk_requested_total": 0,
-      "bulk_printed_count": 0,
-      "bulk_stop_requested": false,
-      "current_svg_total_distance_mm": 156.32,
-      "current_executed_distance_mm": 45.2,
-      "current_execution_percent": 28.9,
-      "cumulative_distance_mm": 13100.5,
-      "max_pen_distance_m": 2.5,
-      "used_pen_distance_m": 13.1,
-      "remaining_pen_percent": 89.45
-    }
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
-For this **single-print** example, `bulk_stop_requested` is false; if void is used during an **active bulk** job (`bulk_requested_total` > 0), `bulk_stop_requested` in status is true until the job handles the cancel.
 
 ---
 
@@ -760,10 +732,9 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen" \
 | ----------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------- |
 | `resetCumulative` | `boolean` | No       | Default `false`. If `true`, zeros cumulative distance. `**409` `PRINTER_BUSY`** if the printer is busy. |
 | `meters`          | `number`  | No*      | Sets max pen distance in meters (**must be > 0** if provided).                                          |
-| `maxPenDistanceM` | `number`  | No*      | Alias for `**meters*`*.                                                                                 |
 
 
- At least one of `**resetCumulative: true`** or a max-distance field must be present; otherwise `**400**` `PEN_DISTANCE_NO_ACTION` (`1039`).
+ At least one of `**resetCumulative: true`** or **`meters`** must be present; otherwise `**400`** `PEN_DISTANCE_NO_ACTION` (`1039`).
 
 **Processing order:** When both apply, cumulative reset runs **first**, then max distance.
 
@@ -773,7 +744,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen" \
 curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
   -H "X-API-Key: QSCWDVEFBRGN" \
   -H "Content-Type: application/json" \
-  -d "{\"resetCumulative\":true,\"maxPenDistanceM\":3.0}"
+  -d "{\"resetCumulative\":true,\"meters\":3.0}"
 ```
 
 **Success `data`**
@@ -838,7 +809,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
 
 #### `GET /api/config/ui-profile`
 
-Returns the saved UI profile: `**print`** (paper, position, scale, rotation, invert flags), `**capture`** (scanner/camera corner quad and focus settings), and `**updatedAt**`.
+Returns the saved UI profile: `**print`** (paper, position, scale, rotation, invert flags), `**capture`** (scanner/camera corner quad and focus settings), and `**updatedAt`**.
 
 **Example response** `200` uses the usual envelope; `**data`** is the profile object (not wrapped again).
 
@@ -846,9 +817,9 @@ Returns the saved UI profile: `**print`** (paper, position, scale, rotation, inv
 
 #### `POST /api/config/ui-profile`
 
-**Request body is the profile object itself** — a JSON object with top-level `**capture`** and `**print`** keys (same logical shape as `**data**` from `GET /api/config/ui-profile`).
+**Request body is the profile object itself** — a JSON object with top-level `**capture`** and `**print`** keys (same logical shape as `**data`** from `GET /api/config/ui-profile`).
 
-**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level `**data`** property). The server only reads `**capture`** and `**print**` from the **root** of the JSON body. If you post `{ "data": { "capture": { ... } } }`, `**capture` and `print` are ignored**, the server falls back to defaults (`capture.quad_points` becomes `[]`, `manual_focus_value` to `35`, default `print` settings), and `**success`** can still be `**true`**. You may also see `**scannerApplyWarning**` if scanner session apply fails afterward.
+**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level `**data`** property). The server only reads `**capture`** and `**print`** from the **root** of the JSON body. If you post `{ "data": { "capture": { ... } } }`, `**capture` and `print` are ignored**, the server falls back to defaults (`capture.quad_points` becomes `[]`, `manual_focus_value` to `35`, default `print` settings), and `**success`** can still be `**true`**. You may also see `**scannerApplyWarning`** if scanner session apply fails afterward.
 
 Optional: on success, `**data**` may include `**scannerApplyWarning**` (string) when the profile file saved but pushing capture settings to the scanner service failed (for example upstream **HTTP 400**).
 
@@ -884,7 +855,7 @@ Optional: on success, `**data**` may include `**scannerApplyWarning**` (string) 
 
 #### `GET /api/config/scanner/stream.mjpg`
 
-Send `**X-API-Key`** **or** set query `**token`** to `**PLOTTER_API_KEY`** (or to `**PLOTTER_STREAM_TOKEN**` when that env is set). The configuration page adds `**token**` from the saved API key for `<img>` previews. Anonymous viewers are rejected with **401**.
+Send `**X-API-Key`** **or** set query `**token`** to `**PLOTTER_API_KEY`** (or to `**PLOTTER_STREAM_TOKEN`** when that env is set). The configuration page adds `**token**` from the saved API key for `<img>` previews. Anonymous viewers are rejected with **401**.
 
 **Example request**
 

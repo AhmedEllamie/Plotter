@@ -1,12 +1,12 @@
 # POST /api/pen-max-distance
 
-**Current server:** This path is **not** implemented. Use **`POST /api/config/pen-distance`** with `{"meters":...}` or `{"maxPenDistanceM":...}`. Below is historical pre-security documentation only.
+**Current server:** This path is **not** implemented. Use **`POST /api/config/pen-distance`** with `{"meters":...}` when setting max distance. Below is historical pre-security documentation only.
 
 ## Pre-Security Behavior
 - Authentication: Not required (before API key enforcement was added).
 
 ## What It Takes
-- JSON/form: meters or maxPenDistanceM required
+- JSON/form: `meters` required when setting max distance
 
 ## Response
 - Success envelope (JSON APIs):
