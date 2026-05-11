@@ -15,39 +15,37 @@ LEGACY_API_ERROR_CODES: dict[str, int] = {
     "CAPTURE_PAYLOAD_INVALID": 1006,
     "CAPTURE_UPLOAD_FAILED": 1007,
     "EMPTY_SVG": 1008,
-    "FASTAPI_CLIENT_ERROR": 1009,
-    "FASTAPI_SERVER_ERROR": 1010,
-    "INVALID_PEN_MODE": 1011,
-    "INVALID_QUERY": 1012,
-    "PEN_CHANGE_FINISH_FAILED": 1013,
-    "PEN_CHANGE_START_FAILED": 1014,
-    "PEN_CHANGE_STATE_ERROR": 1015,
-    "PEN_MAX_DISTANCE_FAILED": 1016,
-    "PEN_MAX_DISTANCE_INVALID": 1017,
-    "PEN_MAX_DISTANCE_REQUIRED": 1018,
-    "PEN_DISTANCE_NO_ACTION": 1041,
-    "PRINT_FAILED": 1019,
-    "PRINT_RUNTIME_ERROR": 1020,
-    "PRINT_VALIDATION_ERROR": 1021,
-    "PRINTER_BUSY": 1022,
-    "PRINTER_NOT_BUSY": 1023,
-    "PRINTER_STATE_ERROR": 1024,
-    "RESET_FAILED": 1025,
-    "RESET_VALIDATION_ERROR": 1026,
-    "SCANNER_CAPTURE_FAILED": 1027,
-    "SCANNER_CONFIG_REQUIRED": 1028,
-    "SCANNER_HTTP_ERROR": 1029,
-    "SCANNER_STREAM_FAILED": 1030,
-    "SCANNER_STREAM_HTTP_ERROR": 1031,
-    "SCANNER_STREAM_UNREACHABLE": 1032,
-    "SCANNER_UNREACHABLE": 1033,
-    "SVG_REQUIRED": 1034,
-    "UI_PROFILE_REQUIRED": 1035,
-    "UI_PROFILE_SAVE_FAILED": 1036,
-    "UNAUTHORIZED": 1037,
-    "VOID_BUSY": 1038,
-    "VOID_FAILED": 1039,
-    "VOID_RUNTIME_ERROR": 1040,
+    "INVALID_PEN_MODE": 1009,
+    "INVALID_QUERY": 1010,
+    "PEN_CHANGE_FINISH_FAILED": 1011,
+    "PEN_CHANGE_START_FAILED": 1012,
+    "PEN_CHANGE_STATE_ERROR": 1013,
+    "PEN_MAX_DISTANCE_FAILED": 1014,
+    "PEN_MAX_DISTANCE_INVALID": 1015,
+    "PEN_MAX_DISTANCE_REQUIRED": 1016,
+    "PRINT_FAILED": 1017,
+    "PRINT_RUNTIME_ERROR": 1018,
+    "PRINT_VALIDATION_ERROR": 1019,
+    "PRINTER_BUSY": 1020,
+    "PRINTER_NOT_BUSY": 1021,
+    "PRINTER_STATE_ERROR": 1022,
+    "RESET_FAILED": 1023,
+    "RESET_VALIDATION_ERROR": 1024,
+    "SCANNER_CAPTURE_FAILED": 1025,
+    "SCANNER_CONFIG_REQUIRED": 1026,
+    "SCANNER_HTTP_ERROR": 1027,
+    "SCANNER_STREAM_FAILED": 1028,
+    "SCANNER_STREAM_HTTP_ERROR": 1029,
+    "SCANNER_STREAM_UNREACHABLE": 1030,
+    "SCANNER_UNREACHABLE": 1031,
+    "SVG_REQUIRED": 1032,
+    "UI_PROFILE_REQUIRED": 1033,
+    "UI_PROFILE_SAVE_FAILED": 1034,
+    "UNAUTHORIZED": 1035,
+    "VOID_BUSY": 1036,
+    "VOID_FAILED": 1037,
+    "VOID_RUNTIME_ERROR": 1038,
+    "PEN_DISTANCE_NO_ACTION": 1039,
 }
 
 
@@ -75,7 +73,7 @@ def fastapi_http_exception_legacy_token(status_code: int, detail: Any) -> str:
     if status_code == 401:
         return "UNAUTHORIZED"
     if status_code == 500:
-        return "FASTAPI_SERVER_ERROR"
+        return "PRINT_RUNTIME_ERROR"
     if status_code == 409 and "busy" in lower:
         return "PRINTER_BUSY"
     if "not connected" in lower:
@@ -83,12 +81,12 @@ def fastapi_http_exception_legacy_token(status_code: int, detail: Any) -> str:
     if "no svg file provided" in lower or "no signature svg" in lower:
         return "SVG_REQUIRED"
     if status_code == 400:
-        return "FASTAPI_CLIENT_ERROR"
-    return "FASTAPI_CLIENT_ERROR"
+        return "PRINT_VALIDATION_ERROR"
+    return "PRINT_VALIDATION_ERROR"
 
 
 def fastapi_validation_error_legacy_token() -> str:
-    return "FASTAPI_CLIENT_ERROR"
+    return "PRINT_VALIDATION_ERROR"
 
 
 def format_fastapi_message(legacy_token: str, detail: Any) -> str:

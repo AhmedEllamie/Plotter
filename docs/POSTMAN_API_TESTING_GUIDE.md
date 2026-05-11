@@ -34,7 +34,7 @@ Invalid or missing key → **HTTP 401** and JSON:
   "success": false,
   "message": "[UNAUTHORIZED] Invalid X-API-Key header.",
   "data": null,
-  "errorCode": 1037,
+  "errorCode": 1035,
   "details": null
 }
 ```

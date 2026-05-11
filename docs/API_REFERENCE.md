@@ -1,6 +1,6 @@
 # Plotter Signature — Flask API reference (detailed)
 
-Full HTTP reference for `[plotter_signature/web/flask_app/app.py](../plotter-signature/plotter_signature/web/flask_app/app.py)`. Grouping matches `[plotter-signature/docs/api-grouped/](../plotter-signature/docs/api-grouped/README.md)`: **Command** (`/api/cmd/`*) and **Config** (`/api/config/`*). Each operation lists **parameters with data types**, `**data` shapes**, and **concrete request/response examples**.
+Full HTTP reference for `[plotter_signature/web/flask_app/app.py](../plotter-signature/plotter_signature/web/flask_app/app.py)`. Grouping matches `[plotter-signature/docs/api-grouped/](../plotter-signature/docs/api-grouped/README.md)`: **Command** (`/api/cmd/`*) and **Config** (`/api/config/*`). Each operation lists **parameters with data types**, `**data` shapes**, and **concrete request/response examples**.
 
 ---
 
@@ -9,9 +9,9 @@ Full HTTP reference for `[plotter_signature/web/flask_app/app.py](../plotter-sig
 Examples use:
 
 
-| Placeholder | Value                                                             |
-| ----------- | ----------------------------------------------------------------- |
-| Base URL    | `http://127.0.0.1:5000`                                           |
+| Placeholder          | Value                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Base URL             | `http://127.0.0.1:5000`                                                                                      |
 | API key for examples | Configure the same key in browser **Configuration → API Key**; `PLOTTER_API_KEY` is mandatory on the server. |
 
 
@@ -36,13 +36,13 @@ All JSON success bodies wrap payloads in the [standard envelope](#global-envelop
 ### Response envelope (all `/api/`* JSON responses)
 
 
-| Field       | Type                    | Description                                               |
-| ----------- | ----------------------- | --------------------------------------------------------- |
-| `success`   | `boolean`               | `true` if the call succeeded.                             |
-| `message`   | `string`                | Human-readable summary. On errors, legacy machine tokens (e.g. `UNAUTHORIZED`) are folded into this field as **`[TOKEN] ...`** after the opening bracket. |
-| `data`      | `object | array | null` | Payload; `null` on many errors.                           |
-| `errorCode` | `integer \| null`      | Stable numeric code on failure (see [registry](#api-error-code-registry)); `null` on success. |
-| `details`   | `object | null`         | Optional extra context (e.g. upstream HTTP body snippet). |
+| Field       | Type             | Description                                                                                                                                               |
+| ----------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `success`   | `boolean`        | `true` if the call succeeded.                                                                                                                             |
+| `message`   | `string`         | Human-readable summary. On errors, legacy machine tokens (e.g. `UNAUTHORIZED`) are folded into this field as `**[TOKEN] ...`** after the opening bracket. |
+| `data`      | `object          | array                                                                                                                                                     |
+| `errorCode` | `integer | null` | Stable numeric code on failure (see [registry](#api-error-code-registry)); `null` on success.                                                             |
+| `details`   | `object          | null`                                                                                                                                                     |
 
 
 Source: `[response.py](../plotter-signature/plotter_signature/web/flask_app/response.py)`.
@@ -59,7 +59,7 @@ Host: 127.0.0.1:5000
   "success": false,
   "message": "[UNAUTHORIZED] Invalid X-API-Key header.",
   "data": null,
-  "errorCode": 1037,
+  "errorCode": 1035,
   "details": null
 }
 ```
@@ -68,95 +68,127 @@ HTTP status: `401`.
 
 ### API error code registry
 
-All failing JSON responses that use the standard envelope expose a numeric top-level **`errorCode`**. The same integer is assigned per legacy string key (for documentation and logs). Unknown legacy keys at the server resolve to **`0`**; the raw token still appears inside **`message`** when applicable.
+All failing JSON responses that use the standard envelope expose a numeric top-level `**errorCode**`. The same integer is assigned per legacy string key (for documentation and logs). Unknown legacy keys at the server resolve to `**0**`; the raw token still appears inside `**message**` when applicable.
 
-| `errorCode` | Legacy token |
-| ----------: | ------------ |
-| 1001 | `BULK_PRINT_FAILED` |
-| 1002 | `BULK_STOP_FAILED` |
-| 1003 | `CAPTURE_JOB_NOT_FOUND` |
-| 1004 | `CAPTURE_JOB_TIMEOUT` |
-| 1005 | `CAPTURE_NOT_FOUND` |
-| 1006 | `CAPTURE_PAYLOAD_INVALID` |
-| 1007 | `CAPTURE_UPLOAD_FAILED` |
-| 1008 | `EMPTY_SVG` |
-| 1009 | `FASTAPI_CLIENT_ERROR` |
-| 1010 | `FASTAPI_SERVER_ERROR` |
-| 1011 | `INVALID_PEN_MODE` |
-| 1012 | `INVALID_QUERY` |
-| 1013 | `PEN_CHANGE_FINISH_FAILED` |
-| 1014 | `PEN_CHANGE_START_FAILED` |
-| 1015 | `PEN_CHANGE_STATE_ERROR` |
-| 1016 | `PEN_MAX_DISTANCE_FAILED` |
-| 1017 | `PEN_MAX_DISTANCE_INVALID` |
-| 1018 | `PEN_MAX_DISTANCE_REQUIRED` |
-| 1019 | `PRINT_FAILED` |
-| 1020 | `PRINT_RUNTIME_ERROR` |
-| 1021 | `PRINT_VALIDATION_ERROR` |
-| 1022 | `PRINTER_BUSY` |
-| 1023 | `PRINTER_NOT_BUSY` |
-| 1024 | `PRINTER_STATE_ERROR` |
-| 1025 | `RESET_FAILED` |
-| 1026 | `RESET_VALIDATION_ERROR` |
-| 1027 | `SCANNER_CAPTURE_FAILED` |
-| 1028 | `SCANNER_CONFIG_REQUIRED` |
-| 1029 | `SCANNER_HTTP_ERROR` |
-| 1030 | `SCANNER_STREAM_FAILED` |
-| 1031 | `SCANNER_STREAM_HTTP_ERROR` |
-| 1032 | `SCANNER_STREAM_UNREACHABLE` |
-| 1033 | `SCANNER_UNREACHABLE` |
-| 1034 | `SVG_REQUIRED` |
-| 1035 | `UI_PROFILE_REQUIRED` |
-| 1036 | `UI_PROFILE_SAVE_FAILED` |
-| 1037 | `UNAUTHORIZED` |
-| 1038 | `VOID_BUSY` |
-| 1039 | `VOID_FAILED` |
-| 1040 | `VOID_RUNTIME_ERROR` |
-| 1041 | `PEN_DISTANCE_NO_ACTION` |
-| 0 | _(unregistered / unknown legacy key)_ |
+
+| `errorCode` | Legacy token                          |
+| ----------- | ------------------------------------- |
+| 1001        | `BULK_PRINT_FAILED`                   |
+| 1002        | `BULK_STOP_FAILED`                    |
+| 1003        | `CAPTURE_JOB_NOT_FOUND`               |
+| 1004        | `CAPTURE_JOB_TIMEOUT`                 |
+| 1005        | `CAPTURE_NOT_FOUND`                   |
+| 1006        | `CAPTURE_PAYLOAD_INVALID`             |
+| 1007        | `CAPTURE_UPLOAD_FAILED`               |
+| 1008        | `EMPTY_SVG`                           |
+| 1009        | `INVALID_PEN_MODE`                    |
+| 1010        | `INVALID_QUERY`                       |
+| 1011        | `PEN_CHANGE_FINISH_FAILED`            |
+| 1012        | `PEN_CHANGE_START_FAILED`             |
+| 1013        | `PEN_CHANGE_STATE_ERROR`              |
+| 1014        | `PEN_MAX_DISTANCE_FAILED`             |
+| 1015        | `PEN_MAX_DISTANCE_INVALID`            |
+| 1016        | `PEN_MAX_DISTANCE_REQUIRED`           |
+| 1017        | `PRINT_FAILED`                        |
+| 1018        | `PRINT_RUNTIME_ERROR`                 |
+| 1019        | `PRINT_VALIDATION_ERROR`              |
+| 1020        | `PRINTER_BUSY`                        |
+| 1021        | `PRINTER_NOT_BUSY`                    |
+| 1022        | `PRINTER_STATE_ERROR`                 |
+| 1023        | `RESET_FAILED`                        |
+| 1024        | `RESET_VALIDATION_ERROR`              |
+| 1025        | `SCANNER_CAPTURE_FAILED`              |
+| 1026        | `SCANNER_CONFIG_REQUIRED`             |
+| 1027        | `SCANNER_HTTP_ERROR`                  |
+| 1028        | `SCANNER_STREAM_FAILED`               |
+| 1029        | `SCANNER_STREAM_HTTP_ERROR`           |
+| 1030        | `SCANNER_STREAM_UNREACHABLE`          |
+| 1031        | `SCANNER_UNREACHABLE`                 |
+| 1032        | `SVG_REQUIRED`                        |
+| 1033        | `UI_PROFILE_REQUIRED`                 |
+| 1034        | `UI_PROFILE_SAVE_FAILED`              |
+| 1035        | `UNAUTHORIZED`                        |
+| 1036        | `VOID_BUSY`                           |
+| 1037        | `VOID_FAILED`                         |
+| 1038        | `VOID_RUNTIME_ERROR`                  |
+| 1039        | `PEN_DISTANCE_NO_ACTION`              |
+| 0           | *(unregistered / unknown legacy key)* |
+
 
 Implementation: `[api_error_codes.py](../plotter-signature/plotter_signature/infrastructure/errors/api_error_codes.py)`.
 
 ### Last API error snapshot (`GET /api/cmd/status`)
 
-The server keeps a thread-safe **last API error** record (updated whenever any route returns an error through the shared `api_error` helper). Successful **mutating** responses (`POST`, `PUT`, `PATCH`, `DELETE`) clear this snapshot; **`GET`** and **`HEAD`** success responses do **not** clear it, so operators can still see recent failures while polling status.
+The server keeps a thread-safe **last API error** record (updated whenever any route returns an error through the shared `api_error` helper). Successful **mutating** responses (`POST`, `PUT`, `PATCH`, `DELETE`) clear this snapshot; `**GET*`* and `**HEAD**` success responses do **not** clear it, so operators can still see recent failures while polling status.
 
-The current snapshot is merged into **`GET /api/cmd/status`** success payload as:
+The current snapshot is merged into `**GET /api/cmd/status`** success payload as:
 
-| Field                  | Type                 | Description |
-| ---------------------- | -------------------- | ----------- |
-| `lastApiErrorCode`     | `integer \| null`    | Numeric code (same scheme as top-level envelope), or `null`. |
-| `lastApiErrorMessage`  | `string \| null`     | Full message string (includes `[TOKEN]` prefix when applicable), or `null`. |
-| `lastApiErrorAt`       | `string \| null`     | ISO-8601 UTC timestamp when the error was recorded, or `null`. |
+
+| Field                 | Type             | Description                                                                 |
+| --------------------- | ---------------- | --------------------------------------------------------------------------- |
+| `lastApiErrorCode`    | `integer | null` | Numeric code (same scheme as top-level envelope), or `null`.                |
+| `lastApiErrorMessage` | `string | null`  | Full message string (includes `[TOKEN]` prefix when applicable), or `null`. |
+| `lastApiErrorAt`      | `string | null`  | ISO-8601 UTC timestamp when the error was recorded, or `null`.              |
+
 
 These fields describe the **last recorded failure**, not an error in the status response itself (which remains `200` / `success: true` when the status call succeeds).
 
 ### Authentication (all `/api/*` routes)
 
 
-| Location    | Name               | Type     | Required    | Description                                                                                                                                       |
-| ----------- | ------------------ | -------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HTTP header | `X-API-Key`        | `string` | **Yes** for every `/api/*` route | Must match server `PLOTTER_API_KEY` or request returns **401**. |
-| Query       | `token`            | `string` | Alternative (**only** `GET /api/config/scanner/stream.mjpg`) | Must equal **`PLOTTER_STREAM_TOKEN`** if that env is non-empty, otherwise **`PLOTTER_API_KEY`**. Lets the configuration page use `<img src="...">`, which cannot send headers. **May appear in logs/referrers.** |
+| Location    | Name        | Type     | Required                                                     | Description                                                                                                                                                                                                      |
+| ----------- | ----------- | -------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP header | `X-API-Key` | `string` | **Yes** for every `/api/*` route                             | Must match server `PLOTTER_API_KEY` or request returns **401**.                                                                                                                                                  |
+| Query       | `token`     | `string` | Alternative (**only** `GET /api/config/scanner/stream.mjpg`) | Must equal `**PLOTTER_STREAM_TOKEN`** if that env is non-empty, otherwise `**PLOTTER_API_KEY**`. Lets the configuration page use `<img src="...">`, which cannot send headers. **May appear in logs/referrers.** |
 
 
-**`PLOTTER_API_KEY` is mandatory.** Flask `create_app` and FastAPI `create_app` raise `RuntimeError` and refuse to start if the variable is missing or blank. There is no anonymous / development bypass.
+`**PLOTTER_API_KEY` is mandatory.** Flask `create_app` raises `RuntimeError` and refuses to start if the variable is missing or blank. There is no anonymous / development bypass.
+
+All `/api/*` routes require a matching `**X-API-Key`** header, **except** the scanner stream which may also use the `**token`** query parameter as described above (missing or invalid → **401**).
 
 
-All `/api/*` routes require a matching **`X-API-Key`** header, **except** the scanner stream which may also use the **`token`** query parameter as described above (missing or invalid → **401**).
+| `errorCode` (numeric) | Legacy token   | HTTP | Meaning               |
+| --------------------- | -------------- | ---- | --------------------- |
+| 1035                  | `UNAUTHORIZED` | 401  | Missing or wrong key. |
 
 
-| `errorCode` (numeric) | Legacy token | HTTP | Meaning |
-| ---------------------: | ------------ | --- | ----- |
-| 1037 | `UNAUTHORIZED` | 401 | Missing or wrong key. |
+### Changing the server API key (Flask on Ubuntu)
 
+Bundled production units load `**EnvironmentFile=/etc/plotter-signature/plotter-signature.env`** for `**plotter-signature-flask.service**` (see `[deploy/ubuntu/plotter-signature-flask.service](../deploy/ubuntu/plotter-signature-flask.service)`). Adjust paths if your install differs.
 
-### Changing the server API key
+1. **Edit the env file** and set a new long random secret for `**PLOTTER_API_KEY`** (the service refuses to start if this line is missing, blank, or commented out):
 
-1. On the plotter host, set or update **`PLOTTER_API_KEY`** in the environment (or in the systemd override / `.env` file used at service start). The server will refuse to start if this is unset or blank.
-2. **Restart** the Flask (or FastAPI) process so the new value loads.
-3. Update every client (**Configuration page saved API Key**, kiosk env / key file if used, integrations) so they send the same value in **`X-API-Key`**. For the scanner MJPEG URL in the browser, either send **`X-API-Key`** (e.g. from scripted clients) or use query **`token`** as documented for `stream.mjpg`. Optional: set **`PLOTTER_STREAM_TOKEN`** to a separate secret and use that value only in the stream URL query (still send **`PLOTTER_API_KEY`** on `fetch` requests).
+```bash
+sudo nano /etc/plotter-signature/plotter-signature.env
+```
 
+Example line (replace the value only):
+
+```bash
+PLOTTER_API_KEY=your-new-long-random-secret
+```
+
+You can copy the template from `[plotter-signature.env.example](../deploy/ubuntu/plotter-signature.env.example)` if the file does not exist yet (`sudo mkdir -p /etc/plotter-signature` first).
+
+1. **Restart Flask** so the process reloads the environment:
+
+```bash
+sudo systemctl restart plotter-signature-flask
+```
+
+If you edited a systemd **drop-in** or unit file, run `**sudo systemctl daemon-reload`** before restarting.
+
+1. **Quick check** (default bundled unit listens on `**5001`**; change host/port if your `serve-flask` args differ):
+
+```bash
+curl -sS -o /dev/null -w "%{http_code}\n" \
+  -H "X-API-Key: your-new-long-random-secret" \
+  "http://127.0.0.1:5001/api/cmd/health"
+```
+
+Expect `**200**`. A wrong or missing key returns `**401**`.
+
+1. **Update every client** — **Configuration → API Key**, kiosk env / `/etc/plotter-signature/plotter-signature.env` (or `PLOTTER_API_KEY_FILE`), and any integrations — so `**X-API-Key`** matches the server. For `**GET /api/config/scanner/stream.mjpg**`, use query `**token**` as documented, or set a separate `**PLOTTER_STREAM_TOKEN**` for the URL while keeping `**PLOTTER_API_KEY**` on normal `**fetch**` calls.
 
 ### Static HTML (no API key)
 
@@ -194,11 +226,11 @@ Common header: `**X-API-Key**`: `string`.
 **Success `data` object**
 
 
-| Field                    | Type      | Description                                           |
-| ------------------------ | --------- | ----------------------------------------------------- |
-| `printerConnected`       | `boolean` | Serial port open.                                     |
+| Field                    | Type      | Description                                                         |
+| ------------------------ | --------- | ------------------------------------------------------------------- |
+| `printerConnected`       | `boolean` | Serial port open.                                                   |
 | `printerBusy`            | `boolean` | `true` when the printer is busy (print, bulk, void, or pen change). |
-| `captureResetConfigured` | `boolean` | `CAPTURE_RESET_URL` set (see `FlaskCaptureSettings`). |
+| `captureResetConfigured` | `boolean` | `CAPTURE_RESET_URL` set (see `FlaskCaptureSettings`).               |
 
 
 **HTTP:** `200`
@@ -220,8 +252,7 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
     "printerBusy": false,
     "captureResetConfigured": true
   },
-  "errorCode": null,
-  "details": null
+  "errorCode": null
 }
 ```
 
@@ -235,27 +266,27 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 | —        | —    | —    | —        | No parameters. |
 
 
-**Success `data` object — public status (serial **port name** is not exposed; use **`printer_connected`** for link state)**
+**Success `data` object — public status (serial port name is not exposed; use `printer_connected` for link state)**
 
 
-| Field                           | Type      | Description                                               |
-| ------------------------------- | --------- | --------------------------------------------------------- |
-| `printer_connected`             | `boolean` | `true` if the **HTTP server** has the serial port open.   |
-| `is_busy`                       | `boolean` | `true` during print, bulk, void, or pen change.         |
-| `is_printing`                   | `boolean` | `true` only during **print** or **bulk** jobs.          |
-| `bulk_requested_total`          | `integer` | Bulk job: total copies requested (last bulk job context). |
-| `bulk_printed_count`            | `integer` | Bulk job: copies completed.                               |
-| `bulk_stop_requested`           | `boolean` | Cooperative cancel flag set.                              |
-| `current_svg_total_distance_mm` | `number`  | Total path length (mm) for current SVG context.           |
-| `current_executed_distance_mm`  | `number`  | Pen-down distance executed (mm) for current job.          |
-| `current_execution_percent`     | `number`  | 0–100 progress for current execution.                     |
-| `cumulative_distance_mm`        | `number`  | Lifetime pen distance (mm) persisted on disk.             |
-| `max_pen_distance_m`            | `number`  | Configured max pen travel (meters).                       |
-| `used_pen_distance_m`           | `number`  | `cumulative_distance_mm / 1000`.                          |
-| `remaining_pen_percent`         | `number`  | Estimated remaining pen life (percent).                   |
-| `lastApiErrorCode`              | `integer \| null` | Last recorded API error code (see [snapshot](#last-api-error-snapshot-get-apicmdstatus)); `null` if none. |
-| `lastApiErrorMessage`          | `string \| null`  | Message for that error (includes `[TOKEN]` when applicable). |
-| `lastApiErrorAt`                | `string \| null`  | ISO-8601 UTC when that error was recorded. |
+| Field                           | Type             | Description                                                                                               |
+| ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `printer_connected`             | `boolean`        | `true` if the **HTTP server** has the serial port open.                                                   |
+| `is_busy`                       | `boolean`        | `true` during print, bulk, void, or pen change.                                                           |
+| `is_printing`                   | `boolean`        | `true` only during **print** or **bulk** jobs.                                                            |
+| `bulk_requested_total`          | `integer`        | Bulk job: total copies requested (last bulk job context).                                                 |
+| `bulk_printed_count`            | `integer`        | Bulk job: copies completed.                                                                               |
+| `bulk_stop_requested`           | `boolean`        | Cooperative cancel flag set.                                                                              |
+| `current_svg_total_distance_mm` | `number`         | Total path length (mm) for current SVG context.                                                           |
+| `current_executed_distance_mm`  | `number`         | Pen-down distance executed (mm) for current job.                                                          |
+| `current_execution_percent`     | `number`         | 0–100 progress for current execution.                                                                     |
+| `cumulative_distance_mm`        | `number`         | Lifetime pen distance (mm) persisted on disk.                                                             |
+| `max_pen_distance_m`            | `number`         | Configured max pen travel (meters).                                                                       |
+| `used_pen_distance_m`           | `number`         | `cumulative_distance_mm / 1000`.                                                                          |
+| `remaining_pen_percent`         | `number`         | Estimated remaining pen life (percent).                                                                   |
+| `lastApiErrorCode`              | `integer | null` | Last recorded API error code (see [snapshot](#last-api-error-snapshot-get-apicmdstatus)); `null` if none. |
+| `lastApiErrorMessage`           | `string | null`  | Message for that error (includes `[TOKEN]` when applicable).                                              |
+| `lastApiErrorAt`                | `string | null`  | ISO-8601 UTC when that error was recorded.                                                                |
 
 
 **HTTP:** `200`
@@ -291,7 +322,6 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
     "lastApiErrorAt": null
   },
   "errorCode": null,
-  "details": null
 }
 ```
 
@@ -300,13 +330,13 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 ### `POST /api/cmd/print`
 
 
-| Location    | Name               | Type                             | Required | Default | Description                                                                                             |
-| ----------- | ------------------ | -------------------------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| Header      | `Content-Type`     | `string`                         | Yes      | —       | Must be `multipart/form-data`.                                                                          |
-| Multipart   | `svg` or `file`    | `file` (bytes)                   | **Yes** one of | —       | SVG file for this request only. |
-| Multipart   | `printRequestJson` | `string`                         | No       | —       | Stringified JSON; may contain nested `printRequest` with `[PrintRequest](#printrequest-fields)` fields. |
-| Multipart   | (flat keys)        | `string` / `integer` / `boolean` | No       | —       | Any `[PrintRequest](#printrequest-fields)` keys as form fields (e.g. `scale`, `xPosition`).             |
-| Body (JSON) | (entire body)      | `object`                         | No       | —       | Used only if JSON present: top-level keys or nested `printRequest` (see `_extract_print_payload`).      |
+| Location    | Name               | Type                             | Required       | Default | Description                                                                                             |
+| ----------- | ------------------ | -------------------------------- | -------------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| Header      | `Content-Type`     | `string`                         | Yes            | —       | Must be `multipart/form-data`.                                                                          |
+| Multipart   | `svg` or `file`    | `file` (bytes)                   | **Yes** one of | —       | SVG file for this request only.                                                                         |
+| Multipart   | `printRequestJson` | `string`                         | No             | —       | Stringified JSON; may contain nested `printRequest` with `[PrintRequest](#printrequest-fields)` fields. |
+| Multipart   | (flat keys)        | `string` / `integer` / `boolean` | No             | —       | Any `[PrintRequest](#printrequest-fields)` keys as form fields (e.g. `scale`, `xPosition`).             |
+| Body (JSON) | (entire body)      | `object`                         | No             | —       | Used only if JSON present: top-level keys or nested `printRequest` (see `_extract_print_payload`).      |
 
 
 **Preconditions:** Printer connected; otherwise `409` `PRINTER_STATE_ERROR`.
@@ -314,13 +344,13 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 **Success `data` (immediate completion, HTTP `200`)**
 
 
-| Field          | Type      | Description                                                      |
-| -------------- | --------- | ---------------------------------------------------------------- |
-| `queued`       | `boolean` | `false`.                                                         |
-| `jobId`        | `string`  | UUID string, print history row id.                               |
-| `jobType`      | `string`  | `"print"`.                                                       |
-| `svgFileName`  | `string`  | Original upload name.                                            |
-| `commandCount` | `integer` | G-code line count.                                               |
+| Field          | Type      | Description                                                                                                                |
+| -------------- | --------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `queued`       | `boolean` | `false`.                                                                                                                   |
+| `jobId`        | `string`  | UUID string, print history row id.                                                                                         |
+| `jobType`      | `string`  | `"print"`.                                                                                                                 |
+| `svgFileName`  | `string`  | Original upload name.                                                                                                      |
+| `commandCount` | `integer` | G-code line count.                                                                                                         |
 | `result`       | `object`  | Slim print summary: `commands_sent`, `cumulative_distance_mm`, `executed_distance_mm`, `execution_percent`, `job_stopped`. |
 
 
@@ -340,14 +370,14 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 **Error `errorCode`**
 
 
-| Code | Legacy token | HTTP | Description                                  |
-| ---- | ------------ | ---- | -------------------------------------------- |
-| 1024 | `PRINTER_STATE_ERROR` | 409 | Not connected.                               |
-| 1034 | `SVG_REQUIRED` | 400 | Missing `svg` part.                          |
-| 1008 | `EMPTY_SVG` | 400 | Zero-length file.                            |
-| 1021 | `PRINT_VALIDATION_ERROR` | 400 | Bad scale/rotation/copies or SVG conversion. |
-| 1020 | `PRINT_RUNTIME_ERROR` | 400 | Runtime error in job.                        |
-| 1019 | `PRINT_FAILED` | 500 | Unexpected failure.                          |
+| Code | Legacy token             | HTTP | Description                                  |
+| ---- | ------------------------ | ---- | -------------------------------------------- |
+| 1022 | `PRINTER_STATE_ERROR`    | 409  | Not connected.                               |
+| 1032 | `SVG_REQUIRED`           | 400  | Missing `svg` part.                          |
+| 1008 | `EMPTY_SVG`              | 400  | Zero-length file.                            |
+| 1019 | `PRINT_VALIDATION_ERROR` | 400  | Bad scale/rotation/copies or SVG conversion. |
+| 1018 | `PRINT_RUNTIME_ERROR`    | 400  | Runtime error in job.                        |
+| 1017 | `PRINT_FAILED`           | 500  | Unexpected failure.                          |
 
 
 **Example request** (multipart + `printRequestJson`)
@@ -379,8 +409,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
     "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     "jobType": "print"
   },
-  "errorCode": null,
-  "details": null
+  "errorCode": null
 }
 ```
 
@@ -398,8 +427,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
     "signatureSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "svgFileName": "signature.svg"
   },
-  "errorCode": null,
-  "details": null
+  "errorCode": null
 }
 ```
 
@@ -410,7 +438,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
   "success": false,
   "message": "[PRINTER_STATE_ERROR] Printer is not connected. Open the plotter from the Desktop App or CLI first.",
   "data": null,
-  "errorCode": 1024,
+  "errorCode": 1022,
   "details": null
 }
 ```
@@ -432,15 +460,15 @@ Same `**multipart/form-data**` and print parameters as single print, plus:
 **Success `data` (HTTP `200`, not queued):** Same pattern as single print, plus:
 
 
-| Field          | Type      | Description                                            |
-| -------------- | --------- | ------------------------------------------------------ |
-| `bulkProgress` | `object`  | `requestedTotal`, `printedCount`, `stopRequested`.     |
-| `result`       | `object`  | Slim bulk summary: `cumulative_distance_mm`, `execution_percent`, `total_commands_sent`. |
+| Field          | Type     | Description                                                                              |
+| -------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `bulkProgress` | `object` | `requestedTotal`, `printedCount`, `stopRequested`.                                       |
+| `result`       | `object` | Slim bulk summary: `cumulative_distance_mm`, `execution_percent`, `total_commands_sent`. |
 
 
 **Queued `data` (HTTP `202`):** Same shape as print queue response; `jobType` is `"bulk"`.
 
-**Extra `errorCode`:** `1019` (`PRINT_FAILED`) on HTTP `500`.
+**Extra `errorCode`:** `1017` (`PRINT_FAILED`) on HTTP `500`.
 
 **Example request**
 
@@ -475,8 +503,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
     "jobId": "550e8400-e29b-41d4-a716-446655440000",
     "jobType": "bulk"
   },
-  "errorCode": null,
-  "details": null
+  "errorCode": null
 }
 ```
 
@@ -545,7 +572,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
 | —        | —    | —    | —        | No body.    |
 
 
-**Idle printer — success `data`:** empty object `{}`. Use **`message`** for the outcome text; use [`GET /api/cmd/status`](#get-apicmdstatus) for live printer state.
+**Idle printer — success `data`:** empty object `{}`. Use `**message`** for the outcome text; use `[GET /api/cmd/status](#get-apicmdstatus)` for live printer state.
 
 **Busy printer — success `data`:** `{ "status": <PrinterStatus> }` (same as bulk stop).
 
@@ -666,7 +693,7 @@ python -m plotter_signature.cli disconnect
 
 No body. Printer must be connected and not busy.
 
-**Success `data`:** empty object `{}`. Use **`message`** for the outcome text; use [`GET /api/cmd/status`](#get-apicmdstatus) for live printer state.
+**Success `data`:** empty object `{}`. Use `**message`** for the outcome text; use `[GET /api/cmd/status](#get-apicmdstatus)` for live printer state.
 
 **Example response** `200`
 
@@ -686,7 +713,7 @@ No body. Printer must be connected and not busy.
 
 No body. Same preconditions as **start** (printer connected, not busy).
 
-**Success `data`:** empty object `{}`. Use **`message`** for the outcome text; use [`GET /api/cmd/status`](#get-apicmdstatus) for live printer state.
+**Success `data`:** empty object `{}`. Use `**message`** for the outcome text; use `[GET /api/cmd/status](#get-apicmdstatus)` for live printer state.
 
 **Example request**
 
@@ -730,13 +757,15 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen" \
 
 **Request body** (JSON, or form fields with the same keys)
 
-| Field | Type | Required | Description |
-| ----- | ---- | -------- | ----------- |
-| `resetCumulative` | `boolean` | No | Default `false`. If `true`, zeros cumulative distance. **`409` `PRINTER_BUSY`** if the printer is busy. |
-| `meters` | `number` | No* | Sets max pen distance in meters (**must be &gt; 0** if provided). |
-| `maxPenDistanceM` | `number` | No* | Alias for **`meters`**. |
 
-\* At least one of **`resetCumulative: true`** or a max-distance field must be present; otherwise **`400`** `PEN_DISTANCE_NO_ACTION` (`1041`).
+| Field             | Type      | Required | Description                                                                                             |
+| ----------------- | --------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `resetCumulative` | `boolean` | No       | Default `false`. If `true`, zeros cumulative distance. `**409` `PRINTER_BUSY`** if the printer is busy. |
+| `meters`          | `number`  | No*      | Sets max pen distance in meters (**must be > 0** if provided).                                          |
+| `maxPenDistanceM` | `number`  | No*      | Alias for `**meters*`*.                                                                                 |
+
+
+ At least one of `**resetCumulative: true**` or a max-distance field must be present; otherwise `**400**` `PEN_DISTANCE_NO_ACTION` (`1039`).
 
 **Processing order:** When both apply, cumulative reset runs **first**, then max distance.
 
@@ -751,11 +780,13 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
 
 **Success `data`**
 
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| `maxPenDistanceM` | `number` | Configured max (meters). |
-| `remainingPenPercent` | `number` | Remaining pen life estimate (percent). |
+
+| Field                  | Type     | Description                                                                            |
+| ---------------------- | -------- | -------------------------------------------------------------------------------------- |
+| `maxPenDistanceM`      | `number` | Configured max (meters).                                                               |
+| `remainingPenPercent`  | `number` | Remaining pen life estimate (percent).                                                 |
 | `cumulativeDistanceMm` | `number` | Present **only when** `resetCumulative` was `true`; value after reset (typically `0`). |
+
 
 **Example — reset only**
 
@@ -794,13 +825,14 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
 **Error `errorCode` (numeric)**
 
 
-| Code | Legacy | HTTP | Description |
-| ---: | ------ | --- | ----------- |
-| 1041 | `PEN_DISTANCE_NO_ACTION` | 400 | Neither reset nor max distance supplied. |
-| 1022 | `PRINTER_BUSY` | 409 | Reset requested while printer is busy. |
-| 1017 | `PEN_MAX_DISTANCE_INVALID` | 400 | Invalid max distance (e.g. ≤ 0 or bad number). |
-| 1025 | `RESET_FAILED` | 500 | Unexpected failure (combined or reset portion). |
-| 1016 | `PEN_MAX_DISTANCE_FAILED` | 500 | Unexpected failure on max-distance path alone. |
+| Code | Legacy                     | HTTP | Description                                     |
+| ---- | -------------------------- | ---- | ----------------------------------------------- |
+| 1039 | `PEN_DISTANCE_NO_ACTION`   | 400  | Neither reset nor max distance supplied.        |
+| 1020 | `PRINTER_BUSY`             | 409  | Reset requested while printer is busy.          |
+| 1015 | `PEN_MAX_DISTANCE_INVALID` | 400  | Invalid max distance (e.g. ≤ 0 or bad number).  |
+| 1023 | `RESET_FAILED`             | 500  | Unexpected failure (combined or reset portion). |
+| 1014 | `PEN_MAX_DISTANCE_FAILED`  | 500  | Unexpected failure on max-distance path alone.  |
+
 
 ---
 
@@ -808,21 +840,21 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
 
 #### `GET /api/config/ui-profile`
 
-Returns the saved UI profile: **`print`** (paper, position, scale, rotation, invert flags), **`capture`** (scanner/camera corner quad and focus settings), and **`updatedAt`**.
+Returns the saved UI profile: `**print`** (paper, position, scale, rotation, invert flags), `**capture**` (scanner/camera corner quad and focus settings), and `**updatedAt**`.
 
-**Example response** `200` uses the usual envelope; **`data`** is the profile object (not wrapped again).
+**Example response** `200` uses the usual envelope; `**data`** is the profile object (not wrapped again).
 
 ---
 
 #### `POST /api/config/ui-profile`
 
-**Request body is the profile object itself** — a JSON object with top-level **`capture`** and **`print`** keys (same logical shape as **`data`** from `GET /api/config/ui-profile`).
+**Request body is the profile object itself** — a JSON object with top-level `**capture`** and `**print**` keys (same logical shape as `**data**` from `GET /api/config/ui-profile`).
 
-**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level **`data`** property). The server only reads **`capture`** and **`print`** from the **root** of the JSON body. If you post `{ "data": { "capture": { ... } } }`, **`capture` and `print` are ignored**, the server falls back to defaults (`capture.quad_points` becomes `[]`, `manual_focus_value` to `35`, default `print` settings), and **`success`** can still be **`true`**. You may also see **`scannerApplyWarning`** if scanner session apply fails afterward.
+**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level `**data`** property). The server only reads `**capture**` and `**print**` from the **root** of the JSON body. If you post `{ "data": { "capture": { ... } } }`, `**capture` and `print` are ignored**, the server falls back to defaults (`capture.quad_points` becomes `[]`, `manual_focus_value` to `35`, default `print` settings), and `**success`** can still be `**true**`. You may also see `**scannerApplyWarning**` if scanner session apply fails afterward.
 
-Optional: on success, **`data`** may include **`scannerApplyWarning`** (string) when the profile file saved but pushing capture settings to the scanner service failed (for example upstream **HTTP 400**).
+Optional: on success, `**data**` may include `**scannerApplyWarning**` (string) when the profile file saved but pushing capture settings to the scanner service failed (for example upstream **HTTP 400**).
 
-**`updatedAt`** is written by the server on save; clients may omit it in the request.
+`**updatedAt`** is written by the server on save; clients may omit it in the request.
 
 **Example request body** (root-level `capture` / `print` only)
 
@@ -854,7 +886,7 @@ Optional: on success, **`data`** may include **`scannerApplyWarning`** (string) 
 
 #### `GET /api/config/scanner/stream.mjpg`
 
-Send **`X-API-Key`** **or** set query **`token`** to **`PLOTTER_API_KEY`** (or to **`PLOTTER_STREAM_TOKEN`** when that env is set). The configuration page adds **`token`** from the saved API key for `<img>` previews. Anonymous viewers are rejected with **401**.
+Send `**X-API-Key`** **or** set query `**token`** to `**PLOTTER_API_KEY**` (or to `**PLOTTER_STREAM_TOKEN**` when that env is set). The configuration page adds `**token**` from the saved API key for `<img>` previews. Anonymous viewers are rejected with **401**.
 
 **Example request**
 
@@ -900,15 +932,15 @@ Non-empty JSON body. Scanner-session keys match the `capture` section of `POST /
 **Success `data`**
 
 
-| Field         | Type      | Description                                                                                                                            |
-| ------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `captureId`   | `string`  | Scanner job / capture id.                                                                                                              |
-| `fileName`    | `string`  | Stored file name (e.g. `rectified-{id}.png`).                                                                                          |
-| `contentType` | `string`  | MIME type of the stored image.                                                                                                         |
-| `sizeBytes`   | `integer` | Decoded image size.                                                                                                                    |
-| `capturedAt`  | `string`  | ISO-8601 timestamp (UTC).                                                                                                              |
-| `imageUrl`    | `string`  | Path for the same stored bytes returned when `includeDataUri` is true (same **`X-API-Key`** rules as other `/api/*` URLs if under `/api/`). |
-| `dataUri`     | `string`  | Present only when `includeDataUri` is true.                                                                                            |
+| Field         | Type      | Description                                                                                                                                 |
+| ------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `captureId`   | `string`  | Scanner job / capture id.                                                                                                                   |
+| `fileName`    | `string`  | Stored file name (e.g. `rectified-{id}.png`).                                                                                               |
+| `contentType` | `string`  | MIME type of the stored image.                                                                                                              |
+| `sizeBytes`   | `integer` | Decoded image size.                                                                                                                         |
+| `capturedAt`  | `string`  | ISO-8601 timestamp (UTC).                                                                                                                   |
+| `imageUrl`    | `string`  | Path for the same stored bytes returned when `includeDataUri` is true (same `**X-API-Key**` rules as other `/api/*` URLs if under `/api/`). |
+| `dataUri`     | `string`  | Present only when `includeDataUri` is true.                                                                                                 |
 
 
 Common scanner failures use `SCANNER_CAPTURE_FAILED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, or `SCANNER_CONFIG_REQUIRED` (`400` when the body is missing or not a JSON object).
@@ -951,14 +983,14 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/scanner/capture/oneshot" \
 Query parameters:
 
 
-| Name      | Type      | Default | Description |
-| --------- | --------- | ------- | ----------- |
-| `days`    | `integer` | `30`    | Only jobs with `queued_at` within this many days (min `1`). |
-| `limit`   | `integer` | `500`   | Max rows (clamped `1`–`2000`). |
+| Name      | Type      | Default | Description                                                                                                                                                                                           |
+| --------- | --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `days`    | `integer` | `30`    | Only jobs with `queued_at` within this many days (min `1`).                                                                                                                                           |
+| `limit`   | `integer` | `500`   | Max rows (clamped `1`–`2000`).                                                                                                                                                                        |
 | `compact` | `boolean` | `false` | If `true` / `1` / `yes`, each `items[]` entry is trimmed: omits `started_at`, omits `error_message` when null, unwraps stored `result.payload` into a slim `result` (+ `bulkProgress` for bulk jobs). |
 
 
-**Default (`compact` off):** Each item includes all SQLite columns (`started_at`, `error_message`, etc.) and **`result`** as stored (for new jobs, `result.payload` holds the same slim print/bulk shapes as `POST /api/cmd/print` responses).
+**Default (`compact` off):** Each item includes all SQLite columns (`started_at`, `error_message`, etc.) and `**result`** as stored (for new jobs, `result.payload` holds the same slim print/bulk shapes as `POST /api/cmd/print` responses).
 
 **Example request**
 
@@ -1020,17 +1052,17 @@ Request log listing/detail config APIs were removed. Use `GET /api/config/print-
 Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat form keys.
 
 
-| Field        | JSON keys                | Type            | Default   | Validation                                                                      |
-| ------------ | ------------------------ | --------------- | --------- | ------------------------------------------------------------------------------- |
-| Paper preset | `paper`, `Paper`         | `string | null` | `null`    | Must match a [Paper enum](#paper-enum-values) name or value (case-insensitive). |
-| Width        | `width`, `Width`         | `string`        | `"210mm"` | Replaced when `paper` is set from preset.                                       |
-| Height       | `height`, `Height`       | `string`        | `"297mm"` | Replaced when `paper` is set.                                                   |
-| X position   | `xPosition`, `XPosition` | `string`        | `"50mm"`  |                                                                                 |
-| Y position   | `yPosition`, `YPosition` | `string`        | `"50mm"`  |                                                                                 |
-| Scale        | `scale`, `Scale`         | `integer`       | `1`       | Must be ≥ `1`.                                                                  |
-| Rotation     | `rotation`, `Rotation`   | `integer`       | `0`       | `0`–`360`.                                                                      |
-| Invert X     | `invertX`, `InvertX`     | `boolean`       | `false`   | Parsed via `parse_bool` (accepts `1`/`true`/`yes` in strings).                  |
-| Invert Y     | `invertY`, `InvertY`     | `boolean`       | `true`    | Same parsing.                                                                   |
+| Field        | JSON keys                | Type      | Default   | Validation                                                     |
+| ------------ | ------------------------ | --------- | --------- | -------------------------------------------------------------- |
+| Paper preset | `paper`, `Paper`         | `string   | null`     | `null`                                                         |
+| Width        | `width`, `Width`         | `string`  | `"210mm"` | Replaced when `paper` is set from preset.                      |
+| Height       | `height`, `Height`       | `string`  | `"297mm"` | Replaced when `paper` is set.                                  |
+| X position   | `xPosition`, `XPosition` | `string`  | `"50mm"`  |                                                                |
+| Y position   | `yPosition`, `YPosition` | `string`  | `"50mm"`  |                                                                |
+| Scale        | `scale`, `Scale`         | `integer` | `1`       | Must be ≥ `1`.                                                 |
+| Rotation     | `rotation`, `Rotation`   | `integer` | `0`       | `0`–`360`.                                                     |
+| Invert X     | `invertX`, `InvertX`     | `boolean` | `false`   | Parsed via `parse_bool` (accepts `1`/`true`/`yes` in strings). |
+| Invert Y     | `invertY`, `InvertY`     | `boolean` | `true`    | Same parsing.                                                  |
 
 
 ### PrintResponse (as JSON)
@@ -1051,29 +1083,29 @@ Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat
 
 ### PrinterStatus (as JSON)
 
-Public API status omits serial **`port_name`**. The **`GET /api/cmd/status`** response adds **`printer_connected`** (same meaning as internal `is_open` on the server). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`.
+Public API status omits serial `**port_name**`. The `**GET /api/cmd/status**` response adds `**printer_connected**` (same meaning as internal `is_open` on the server). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`.
 
 ### RequestLog (as JSON)
 
 
-| Field              | Type            |
-| ------------------ | --------------- |
-| `id`               | `string`        |
-| `requestId`        | `string`        |
-| `status`           | `string`        |
-| `statusValue`      | `integer`       |
-| `approvalResponse` | `string | null` |
-| `errorMessage`     | `string | null` |
-| `createdAt`        | `string`        |
-| `updatedAt`        | `string`        |
-| `completedAt`      | `string | null` |
+| Field              | Type      |
+| ------------------ | --------- |
+| `id`               | `string`  |
+| `requestId`        | `string`  |
+| `status`           | `string`  |
+| `statusValue`      | `integer` |
+| `approvalResponse` | `string   |
+| `errorMessage`     | `string   |
+| `createdAt`        | `string`  |
+| `updatedAt`        | `string`  |
+| `completedAt`      | `string   |
 
 
 ---
 
 ## API index (endpoints in this document)
 
-Quick checklist of every HTTP surface **documented above** (method + path). All `/api/`* routes require **[`X-API-Key`](#authentication-all-api-routes)**, except **`GET /api/config/scanner/stream.mjpg`** which may use query **`token`** as documented there.
+Quick checklist of every HTTP surface **documented above** (method + path). All `/api/`* routes require `**[X-API-Key](#authentication-all-api-routes)`**, except `**GET /api/config/scanner/stream.mjpg**` which may use query `**token**` as documented there.
 
 ### Static pages (no API key)
 
@@ -1121,9 +1153,9 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 **Scanner proxy** (forwards to upstream scanner HTTP service)
 
 
-| Method | Path                                |
-| ------ | ----------------------------------- |
-| `GET`  | `/api/config/scanner/stream.mjpg`   |
+| Method | Path                              |
+| ------ | --------------------------------- |
+| `GET`  | `/api/config/scanner/stream.mjpg` |
 
 
 **Capture** (single-shot scanner storage)
@@ -1137,12 +1169,12 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 **Print history**
 
 
-| Method | Path                                |
-| ------ | ----------------------------------- |
-| `GET`  | `/api/config/print-history`         |
+| Method | Path                        |
+| ------ | --------------------------- |
+| `GET`  | `/api/config/print-history` |
 
 
-**Total:** 2 static routes + Flask JSON/binary API routes under `/api/*` (see tables above).
+**Total:** 2 static routes + Flask JSON/binary API routes under `/api/`* (see tables above).
 
 ---
 
