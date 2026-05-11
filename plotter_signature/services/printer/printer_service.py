@@ -55,6 +55,7 @@ class PrinterService(IPrinterService):
         self._bulk_graceful_stop_requested = threading.Event()
         self._bulk_requested_total = 0
         self._bulk_printed_count = 0
+        self._bulk_mid_cycle_active = False
         self._serial_lock = threading.RLock()
 
     _COMMAND_VALUE_PATTERN = re.compile(r"([A-Za-z])\s*(-?\d+(?:\.\d+)?)")
@@ -270,19 +271,27 @@ class PrinterService(IPrinterService):
         with self._serial_lock:
             self._close_port_unlocked()
 
+    @property
+    def internal_bulk_completed_copies(self) -> int:
+        """Fully completed bulk copies only (excludes the in-flight sheet)."""
+        return int(self._bulk_printed_count)
+
     def get_status(self) -> PrinterStatus:
         current_percent = self._calculate_execution_percent(
             self._current_executed_distance_mm,
             self._current_svg_total_distance_mm,
         )
         used_pen_distance_m = self._cumulative_distance_mm / 1000.0
+        display_bulk_count = self._bulk_printed_count + (1 if self._bulk_mid_cycle_active else 0)
+        if self._bulk_requested_total > 0:
+            display_bulk_count = min(display_bulk_count, self._bulk_requested_total)
         return PrinterStatus(
             is_open=self.is_open,
             port_name=self.port_name,
             is_busy=self.is_busy,
             is_printing=self.is_printing,
             bulk_requested_total=self._bulk_requested_total,
-            bulk_printed_count=self._bulk_printed_count,
+            bulk_printed_count=display_bulk_count,
             bulk_stop_requested=self._bulk_graceful_stop_requested.is_set()
             or (self._bulk_requested_total > 0 and self._stop_requested.is_set()),
             current_svg_total_distance_mm=round(self._current_svg_total_distance_mm, 3),
@@ -473,6 +482,9 @@ class PrinterService(IPrinterService):
         total_distance = self.calculate_svg_distance_mm(gcode)
         self._current_svg_total_distance_mm = total_distance
         executed_distance = 0.0
+        mid_bulk = self._bulk_requested_total > 0
+        if mid_bulk:
+            self._bulk_mid_cycle_active = True
         try:
             print("=== Starting print cycle ===")
             print("Sending M998R handshake...")
@@ -515,6 +527,8 @@ class PrinterService(IPrinterService):
             print("=== Starting eject sequence ===")
             self._eject_paper()
             print("=== Print cycle complete ===")
+            if mid_bulk:
+                self._bulk_mid_cycle_active = False
 
     def _execute_void_cycle(self) -> None:
         try:

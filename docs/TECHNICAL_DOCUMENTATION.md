@@ -218,6 +218,7 @@ For each print cycle:
 ### 7.3 Bulk Print
 
 - `bulk_print(gcode, copies)` loops print cycles
+- `bulk_print` / status: `bulk_printed_count` in `GET /api/cmd/status` includes the **in-flight** bulk sheet (completed + 1 while a cycle runs, capped at requested total).
 - `copies` constrained to 1..100 in API/CLI layer
 - stop request via `stop_bulk_print()` sets a **graceful** flag: the **current copy** completes; the loop checks the flag **between** copies. Immediate cancel still uses `request_print_cancel()` (`_stop_requested`), e.g. void while printing.
 - returns partial completion if stopped early

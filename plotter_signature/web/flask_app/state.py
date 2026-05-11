@@ -25,6 +25,19 @@ class RuntimeState:
         self._lock = Lock()
         self._uploaded_svg: UploadedSvg | None = None
         self._captured_image: CapturedImage | None = None
+        self._bulk_graceful_stop_ack: bool = False
+
+    def set_bulk_graceful_stop_ack(self, value: bool) -> None:
+        with self._lock:
+            self._bulk_graceful_stop_ack = bool(value)
+
+    def get_bulk_graceful_stop_ack(self) -> bool:
+        with self._lock:
+            return self._bulk_graceful_stop_ack
+
+    def clear_bulk_graceful_stop_ack(self) -> None:
+        with self._lock:
+            self._bulk_graceful_stop_ack = False
 
     def set_uploaded_svg(self, file_name: str, content: bytes) -> UploadedSvg:
         file_name = file_name or "uploaded.svg"

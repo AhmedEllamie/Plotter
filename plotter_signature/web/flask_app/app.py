@@ -74,7 +74,10 @@ def _ensure_not_busy(provider: ServiceProvider) -> None:
         raise RuntimeError("Printer is busy.")
 
 
-def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
+def _printer_status_public_dict(
+    provider: ServiceProvider,
+    runtime_state: RuntimeState | None = None,
+) -> dict[str, Any]:
     payload = asdict(provider.printer_service.get_status())
     payload.pop("port_name", None)
     payload.pop("is_open", None)
@@ -88,7 +91,30 @@ def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
         payload["lastApiErrorCode"] = last.error_code
         payload["lastApiErrorMessage"] = last.message
         payload["lastApiErrorAt"] = last.at
+    if runtime_state is not None:
+        if not provider.printer_service.is_printing:
+            runtime_state.clear_bulk_graceful_stop_ack()
+        svc_bs = bool(payload.get("bulk_stop_requested"))
+        payload["bulk_stop_requested"] = svc_bs or runtime_state.get_bulk_graceful_stop_ack()
     return payload
+
+
+_SLIM_BULK_STOP_STATUS_KEYS = (
+    "bulk_printed_count",
+    "bulk_requested_total",
+    "cumulative_distance_mm",
+    "current_svg_total_distance_mm",
+    "remaining_pen_percent",
+    "used_pen_distance_m",
+)
+
+
+def _slim_bulk_stop_status_payload(
+    provider: ServiceProvider,
+    runtime_state: RuntimeState | None = None,
+) -> dict[str, Any]:
+    full = _printer_status_public_dict(provider, runtime_state)
+    return {k: full[k] for k in _SLIM_BULK_STOP_STATUS_KEYS}
 
 
 _SLIM_SINGLE_PRINT_RESULT_KEYS = (
@@ -506,7 +532,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             provider.print_history_store.update_completed(
                 jid,
                 status="stopped",
-                copies_printed=int(st.bulk_printed_count or 0),
+                copies_printed=int(provider.printer_service.internal_bulk_completed_copies or 0),
                 error_message="Print stop requested",
                 result_json={"printerStatus": asdict(st)},
             )
@@ -514,6 +540,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return {"jobStopped": True}
 
     def _execute_queued_job(job: _QueuedPrintJob) -> dict[str, Any]:
+        runtime_state.clear_bulk_graceful_stop_ack()
         active_history_job_holder["id"] = job.job_id
         provider.print_history_store.update_started(job.job_id)
         try:
@@ -1170,7 +1197,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     @app.get("/api/cmd/status")
     def status() -> tuple[Response, int]:
-        return api_success(message="Printer status loaded.", data=_printer_status_public_dict(provider))
+        return api_success(message="Printer status loaded.", data=_printer_status_public_dict(provider, runtime_state))
 
     @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:
@@ -1234,8 +1261,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not stop_requested:
             return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
 
+        runtime_state.set_bulk_graceful_stop_ack(True)
         data = _apply_print_stop_side_effects()
-        data["status"] = _printer_status_public_dict(provider)
+        data["status"] = _slim_bulk_stop_status_payload(provider, runtime_state)
 
         return api_success(
             message="Bulk stop requested. The current copy will finish; remaining copies will not start.",
