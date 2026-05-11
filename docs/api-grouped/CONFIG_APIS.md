@@ -88,7 +88,7 @@ Pen change control endpoints (`start`, `finish`, or mode-based dispatcher).
 
 ## `POST /api/config/pen-distance`
 ### Description
-**Primary** pen maintenance endpoint: optional cumulative distance reset and/or max pen distance (meters). Same auth as other config routes.
+Pen maintenance endpoint: cumulative distance reset and/or max pen distance (meters). **`POST /api/config/reset`** and **`POST /api/config/pen-max-distance`** are **removed** — use this route only.
 ### How to use
 JSON or form: `resetCumulative` (boolean, default false), and/or `meters` or `maxPenDistanceM` (number &gt; 0). At least one action required or **`PEN_DISTANCE_NO_ACTION`** (`400`).
 ### What it takes
@@ -99,36 +99,6 @@ JSON or form: `resetCumulative` (boolean, default false), and/or `meters` or `ma
 - `PEN_DISTANCE_NO_ACTION` (400)
 - `PRINTER_BUSY` (409) when reset requested while busy
 - `PEN_MAX_DISTANCE_INVALID` / `PEN_MAX_DISTANCE_FAILED` / `RESET_FAILED` as applicable
-
-## `POST /api/config/reset` (legacy)
-### Description
-Same as **`pen-distance`** with `resetCumulative: true` (optional `maxPenDistanceM`). Prefer **`POST /api/config/pen-distance`** for new integrations.
-### How to use
-Send optional `maxPenDistanceM`.
-### What it takes
-- JSON body optional.
-- Requires `X-API-Key` when server auth is enabled.
-### Response
-- **`data`** with **`maxPenDistanceM`** only; full distance fields: `GET /api/cmd/status`.
-### Error codes
-- `PRINTER_BUSY` (409)
-- `RESET_VALIDATION_ERROR` (400)
-- `RESET_FAILED` (500)
-
-## `POST /api/config/pen-max-distance` (legacy)
-### Description
-Same as **`pen-distance`** with max field only. Prefer **`POST /api/config/pen-distance`** with `meters` / `maxPenDistanceM`.
-### How to use
-Send `meters` (or `maxPenDistanceM`).
-### What it takes
-- JSON/form payload.
-- Requires `X-API-Key`.
-### Response
-- `stats` (full distance stats object).
-### Error codes
-- `PEN_MAX_DISTANCE_REQUIRED` (400)
-- `PEN_MAX_DISTANCE_INVALID` (400)
-- `PEN_MAX_DISTANCE_FAILED` (500)
 
 ## `GET /api/config/ui-profile` / `POST /api/config/ui-profile`
 ### Description

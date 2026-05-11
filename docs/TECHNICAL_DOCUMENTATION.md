@@ -109,7 +109,7 @@ Used for:
 `python -m plotter_signature.desktop.pen_kiosk`
 
 - Fullscreen desktop operator UI
-- Uses Flask backend endpoints over HTTP (`/api/cmd/status`, `/api/config/change-pen/*`, **`/api/config/pen-distance`**; legacy **`/api/config/reset`** and **`/api/config/pen-max-distance`** remain available)
+- Uses Flask backend endpoints over HTTP (`/api/cmd/status`, `/api/config/change-pen/*`, **`/api/config/pen-distance`**)
 - Does not open local USB; plotter serial is owned by the Flask server process (`printer_connected` in status reflects that link)
 
 ---
@@ -371,9 +371,7 @@ Core printer:
 - `POST /api/config/change-pen/start`
 - `POST /api/config/change-pen/finish`
 - `POST /api/config/change-pen` (mode = start|finish)
-- `POST /api/config/pen-distance` (primary; reset and/or max meters)
-- `POST /api/config/reset` (legacy alias)
-- `POST /api/config/pen-max-distance` (legacy alias)
+- `POST /api/config/pen-distance` (cumulative reset and/or max meters)
 
 Capture and scanner:
 - `POST /api/config/capture`
@@ -617,7 +615,7 @@ Integration caveat:
 ### Pen remaining percent always 0
 
 - Set max pen distance with:
-  - API: `POST /api/config/pen-distance` with `{"meters": <value>}` (legacy: `POST /api/config/pen-max-distance`)
+  - API: `POST /api/config/pen-distance` with `{"meters": <value>}`
   - CLI: `set-pen-max-distance --meters <value>`
 
 ---

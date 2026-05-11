@@ -1397,61 +1397,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data=_pen_distance_slim_response_data(stats, reset_ran=did_reset),
         )
 
-    @app.post("/api/config/reset")
-    def reset() -> tuple[Response, int]:
-        payload = _get_json_dict()
-        raw_max = payload.get("maxPenDistanceM")
-        max_meters: float | None = None
-        if raw_max is not None and str(raw_max).strip() != "":
-            try:
-                max_meters = float(raw_max)
-            except (TypeError, ValueError):
-                return api_error(
-                    "maxPenDistanceM must be a number.",
-                    error_code="RESET_VALIDATION_ERROR",
-                    status_code=400,
-                )
-
-        try:
-            stats, _, _ = _apply_pen_distance_config(reset_cumulative=True, max_meters=max_meters)
-        except RuntimeError as ex:
-            return api_error(str(ex), error_code="PRINTER_BUSY", status_code=409)
-        except ValueError as ex:
-            return api_error(str(ex), error_code="RESET_VALIDATION_ERROR", status_code=400)
-        except Exception as ex:
-            return api_error(f"Reset failed: {ex}", error_code="RESET_FAILED", status_code=500)
-
-        return api_success(
-            message="Printer distance stats reset.",
-            data={"maxPenDistanceM": stats["maxPenDistanceM"]},
-        )
-
-    @app.post("/api/config/pen-max-distance")
-    def set_pen_max_distance() -> tuple[Response, int]:
-        payload = _get_json_dict() or request.form.to_dict(flat=True)
-        raw_meters = payload.get("meters") or payload.get("maxPenDistanceM")
-        if raw_meters is None:
-            return api_error(
-                "meters is required.",
-                error_code="PEN_MAX_DISTANCE_REQUIRED",
-                status_code=400,
-            )
-        try:
-            stats, _, _ = _apply_pen_distance_config(reset_cumulative=False, max_meters=float(raw_meters))
-        except ValueError as ex:
-            return api_error(str(ex), error_code="PEN_MAX_DISTANCE_INVALID", status_code=400)
-        except Exception as ex:
-            return api_error(
-                f"Failed to set max pen distance: {ex}",
-                error_code="PEN_MAX_DISTANCE_FAILED",
-                status_code=500,
-            )
-
-        return api_success(
-            message="Max pen distance updated.",
-            data={"stats": stats},
-        )
-
     def _scanner_manual_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
         """Strip API-only keys so they are never sent to the scanner session endpoints."""
         work = dict(payload)

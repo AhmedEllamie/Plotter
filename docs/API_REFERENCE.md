@@ -726,19 +726,28 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen" \
 
 #### `POST /api/config/pen-distance`
 
-**Primary** endpoint for cumulative distance reset and/or max pen distance. Replaces calling **`POST /api/config/reset`** and **`POST /api/config/pen-max-distance`** separately; those URLs remain as **legacy** aliases (same server logic underneath).
+**Only** endpoint for cumulative distance reset and/or max pen distance in this API version. (`POST /api/config/reset` and `POST /api/config/pen-max-distance` were removed; use this route instead.)
 
 **Request body** (JSON, or form fields with the same keys)
 
 | Field | Type | Required | Description |
 | ----- | ---- | -------- | ----------- |
-| `resetCumulative` | `boolean` | No | Default `false`. If `true`, zeros cumulative distance (same as legacy reset). **`409` `PRINTER_BUSY`** if the printer is busy. |
+| `resetCumulative` | `boolean` | No | Default `false`. If `true`, zeros cumulative distance. **`409` `PRINTER_BUSY`** if the printer is busy. |
 | `meters` | `number` | No* | Sets max pen distance in meters (**must be &gt; 0** if provided). |
 | `maxPenDistanceM` | `number` | No* | Alias for **`meters`**. |
 
 \* At least one of **`resetCumulative: true`** or a max-distance field must be present; otherwise **`400`** `PEN_DISTANCE_NO_ACTION` (`1041`).
 
-**Processing order:** When both apply, cumulative reset runs **first**, then max distance (same as legacy reset with `maxPenDistanceM`).
+**Processing order:** When both apply, cumulative reset runs **first**, then max distance.
+
+**Combined example** (reset then set max in one call):
+
+```bash
+curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
+  -H "X-API-Key: QSCWDVEFBRGN" \
+  -H "Content-Type: application/json" \
+  -d "{\"resetCumulative\":true,\"maxPenDistanceM\":3.0}"
+```
 
 **Success `data`**
 
@@ -792,74 +801,6 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
 | 1017 | `PEN_MAX_DISTANCE_INVALID` | 400 | Invalid max distance (e.g. ≤ 0 or bad number). |
 | 1025 | `RESET_FAILED` | 500 | Unexpected failure (combined or reset portion). |
 | 1016 | `PEN_MAX_DISTANCE_FAILED` | 500 | Unexpected failure on max-distance path alone. |
-
----
-
-#### `POST /api/config/reset`
-
-**Legacy.** Prefer **`POST /api/config/pen-distance`** with `{"resetCumulative":true,...}`. Behavior unchanged: optional **`maxPenDistanceM`** still updates max after reset.
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/reset" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
-  -H "Content-Type: application/json" \
-  -d "{\"maxPenDistanceM\":3.0}"
-```
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Printer distance stats reset.",
-  "data": {
-    "maxPenDistanceM": 3.0
-  },
-  "errorCode": null,
-  "details": null
-}
-```
-
-**`data`** contains **`maxPenDistanceM` only** (meters after reset). Use **`GET /api/cmd/status`** if you need full distance telemetry.
-
----
-
-#### `POST /api/config/pen-max-distance`
-
-**Legacy.** Prefer **`POST /api/config/pen-distance`** with `{"meters":...}` (or `maxPenDistanceM`). Response shape unchanged: **`data.stats`** with full distance stats.
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-max-distance" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
-  -H "Content-Type: application/json" \
-  -d "{\"meters\":2.75}"
-```
-
-**Example response** `200`
-
-```json
-{
-  "success": true,
-  "message": "Max pen distance updated.",
-  "data": {
-    "stats": {
-      "currentSvgTotalDistanceMm": 0.0,
-      "currentExecutedDistanceMm": 0.0,
-      "currentExecutionPercent": 0.0,
-      "cumulativeDistanceMm": 0.0,
-      "maxPenDistanceM": 2.75,
-      "usedPenDistanceM": 0.0,
-      "remainingPenPercent": 100.0
-    }
-  },
-  "errorCode": null,
-  "details": null
-}
-```
 
 ---
 
@@ -1175,8 +1116,6 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | `POST` | `/api/config/change-pen/finish` |
 | `POST` | `/api/config/change-pen`        |
 | `POST` | `/api/config/pen-distance`      |
-| `POST` | `/api/config/reset`             |
-| `POST` | `/api/config/pen-max-distance`  |
 
 
 **Scanner proxy** (forwards to upstream scanner HTTP service)

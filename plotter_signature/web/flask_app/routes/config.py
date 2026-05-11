@@ -62,17 +62,10 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         view_func=handlers["change_pen"],
         methods=["POST"],
     )
-    app.add_url_rule("/api/config/reset", endpoint="config_reset", view_func=handlers["reset"], methods=["POST"])
     app.add_url_rule(
         "/api/config/pen-distance",
         endpoint="config_pen_distance",
         view_func=handlers["pen_distance"],
-        methods=["POST"],
-    )
-    app.add_url_rule(
-        "/api/config/pen-max-distance",
-        endpoint="config_pen_max_distance",
-        view_func=handlers["set_pen_max_distance"],
         methods=["POST"],
     )
     app.add_url_rule(

@@ -1,5 +1,7 @@
 # POST /api/reset
 
+**Current server:** This path is **not** implemented. Use **`POST /api/config/pen-distance`** with `{"resetCumulative":true}` (and optional `maxPenDistanceM` / `meters`). Below is historical pre-security documentation only.
+
 ## Pre-Security Behavior
 - Authentication: Not required (before API key enforcement was added).
 

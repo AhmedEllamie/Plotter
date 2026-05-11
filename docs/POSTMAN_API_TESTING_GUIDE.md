@@ -140,9 +140,7 @@ python -m plotter_signature.cli disconnect
 | POST | `/api/config/change-pen/start` | `{}` | 200 — `data` is `{}` (use `message`) |
 | POST | `/api/config/change-pen/finish` | `{}` | 200 — same |
 | POST | `/api/config/change-pen` | JSON `{"mode":"start"}` or `{"mode":"finish"}` | 200 — delegates to start/finish (`data` `{}`) |
-| POST | `/api/config/pen-distance` | `{"resetCumulative":true}`, `{"meters":2.75}`, or both | 200 — slim `data`: `maxPenDistanceM`, `remainingPenPercent`, optional `cumulativeDistanceMm` after reset |
-| POST | `/api/config/reset` | Optional `{"maxPenDistanceM": 3.0}` (**legacy**; prefer `pen-distance`) | 200 — `data` with **`maxPenDistanceM` only** |
-| POST | `/api/config/pen-max-distance` | `{"meters": 2.75}` (**legacy**; prefer `pen-distance`) | 200 — `data.stats` |
+| POST | `/api/config/pen-distance` | `{"resetCumulative":true}`, `{"meters":2.75}`, both, or `resetCumulative`+`maxPenDistanceM` | 200 — slim `data`: `maxPenDistanceM`, `remainingPenPercent`, optional `cumulativeDistanceMm` after reset |
 
 ---
 
@@ -225,7 +223,7 @@ Invalid integers → `INVALID_QUERY` (400).
 2. **01 Health & config:** `GET health`, `GET config`, `GET ui-profile`.  
 3. **02 Status:** `GET status`.  
 4. **03 Print:** `POST print`, `POST print/bulk`, `POST bulk/stop`, `POST void`.  
-5. **04 Pen / stats:** change-pen, **`pen-distance`** (primary), legacy `reset` / `pen-max-distance` if needed.  
+5. **04 Pen / stats:** change-pen, **`pen-distance`**.  
 6. **05 Capture upload & latest:** `POST capture`, `GET capture/latest`, `GET capture/latest/image`.  
 7. **06 Scanner:** `capture/start`, `capture/{id}/status`, `capture/{id}/result`, `capture/run`, `capture/run/{job_id}`, `stream.mjpg`.  
 8. **07 History:** `GET print-history`.
@@ -254,7 +252,7 @@ Some deployments expose a **FastAPI** controller (see [TECHNICAL_DOCUMENTATION.m
 - `GET /api/config`
 - `GET /api/config/ui-profile` — `POST /api/config/ui-profile`
 - `POST /api/config/change-pen/start` — `POST /api/config/change-pen/finish` — `POST /api/config/change-pen`
-- `POST /api/config/pen-distance` — legacy: `POST /api/config/reset` — `POST /api/config/pen-max-distance`
+- `POST /api/config/pen-distance`
 - `POST /api/config/capture` — `GET /api/config/capture/latest` — `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg`
 - `POST /api/config/scanner/capture/start`
