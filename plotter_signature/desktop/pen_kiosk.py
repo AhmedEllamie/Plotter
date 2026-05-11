@@ -5,7 +5,7 @@ import os
 import socket
 import threading
 from pathlib import Path
-from tkinter import BOTH, LEFT, RIGHT, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
+from tkinter import BOTH, E, LEFT, RIGHT, W, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
 
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -90,6 +90,10 @@ class PenKioskApp:
     _INFO_FG_BAD = "#fecaca"
     _INFO_FG_WARN = "#fde68a"
     _INFO_FG_MUTED = "#94a3b8"
+    _SWITCH_KNOB_POS = (
+        (8, 12, 56, 32),
+        (80, 12, 128, 32),
+    )
 
     def __init__(self, api_base_url: str | None = None) -> None:
         saved = _load_kiosk_settings()
@@ -187,45 +191,56 @@ class PenKioskApp:
         self._apply_active_card()
 
     def _build_status_card(self, parent: Frame) -> None:
+        bg = "#1e293b"
         info_panel = self._status_section(parent, "Info")
-        ip_row = Frame(info_panel, bg="#1e293b")
-        ip_row.pack(fill=X, pady=4)
-        Label(
-            ip_row,
-            text="Printer IP",
-            bg="#1e293b",
-            fg="#94a3b8",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side=LEFT)
-        Label(
-            ip_row,
-            textvariable=self._current_ip_var,
-            bg="#1e293b",
-            fg="#f8fafc",
-            font=("Segoe UI", 12, "bold"),
-            justify="left",
-            wraplength=520,
-        ).pack(side=RIGHT, fill=X, expand=True)
-
-        self._info_server_label = self._status_key_value_row(info_panel, "Server")
-        self._info_plotter_label = self._status_key_value_row(info_panel, "Plotter")
-        self._info_state_label = self._status_key_value_row(info_panel, "State")
+        self._prepare_status_grid(info_panel)
+        r = 0
+        self._grid_cell_key(info_panel, bg, r, 0, "Printer IP")
+        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=340)
+        self._grid_cell_key(info_panel, bg, r, 2, "Server")
+        self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
+        r += 1
+        self._grid_cell_key(info_panel, bg, r, 0, "Plotter")
+        self._info_plotter_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 2, "State")
+        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
 
         meters_panel = self._status_section(parent, "Meters & progress")
-        self._metric_row(meters_panel, "Cumulative distance (m)", self._cumulative_distance_value, bg="#1e293b")
-        self._metric_row(meters_panel, "Executed distance (m)", self._executed_distance_value, bg="#1e293b")
-        self._metric_row(meters_panel, "Execution progress", self._execution_percent_value, bg="#1e293b")
-        self._metric_row(meters_panel, "Pen remaining", self._pen_remaining_value, bg="#1e293b")
-        self._metric_row(meters_panel, "Bulk progress", self._bulk_progress_value, bg="#1e293b")
-        self._metric_row(meters_panel, "Bulk stop requested", self._bulk_stop_value, bg="#1e293b")
+        self._prepare_status_grid(meters_panel)
+        r = 0
+        self._grid_cell_key(meters_panel, bg, r, 0, "Cumulative distance (m)")
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._cumulative_distance_value)
+        self._grid_cell_key(meters_panel, bg, r, 2, "Executed distance (m)")
+        self._grid_cell_value_var(meters_panel, bg, r, 3, self._executed_distance_value)
+        r += 1
+        self._grid_cell_key(meters_panel, bg, r, 0, "Execution progress")
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._execution_percent_value)
+        self._grid_cell_key(meters_panel, bg, r, 2, "Pen remaining")
+        self._grid_cell_value_var(meters_panel, bg, r, 3, self._pen_remaining_value)
+        r += 1
+        self._grid_cell_key(meters_panel, bg, r, 0, "Bulk progress")
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._bulk_progress_value)
+        self._grid_cell_key(meters_panel, bg, r, 2, "Bulk stop requested")
+        self._grid_cell_value_var(meters_panel, bg, r, 3, self._bulk_stop_value)
 
         errors_panel = self._status_section(parent, "Errors")
-        self._error_code_label = self._status_key_value_row(errors_panel, "Error code")
-        self._api_feedback_message_label = self._status_message_row(errors_panel, "Error message")
+        self._prepare_status_grid(errors_panel)
+        self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
+        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
+        self._grid_cell_key(errors_panel, bg, 0, 2, "Error message")
+        self._api_feedback_message_label = self._grid_cell_value_plain(
+            errors_panel,
+            bg,
+            0,
+            3,
+            font=("Segoe UI", 12),
+            initial_fg="#64748b",
+            wraplength=420,
+        )
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
-        block.pack(fill=X, pady=(0, 16))
+        block.pack(fill=X, pady=(0, 10))
         Label(
             block,
             text=title,
@@ -234,51 +249,67 @@ class PenKioskApp:
             font=("Segoe UI", 12, "bold"),
         ).pack(anchor="w", pady=(0, 8))
         inner = Frame(block, bg="#1e293b", padx=18, pady=14)
-        inner.pack(fill=X)
+        inner.pack(fill=BOTH, expand=True)
         return inner
 
-    def _status_key_value_row(self, parent: Frame, key: str) -> Label:
-        row = Frame(parent, bg="#1e293b")
-        row.pack(fill=X, pady=4)
-        Label(
-            row,
-            text=key,
-            bg="#1e293b",
-            fg="#94a3b8",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side=LEFT)
-        value = Label(
-            row,
-            text="—",
-            bg="#1e293b",
-            fg="#f8fafc",
-            font=("Segoe UI", 12, "bold"),
-            justify="right",
-        )
-        value.pack(side=RIGHT)
-        return value
+    def _prepare_status_grid(self, inner: Frame) -> None:
+        inner.grid_columnconfigure(0, weight=0)
+        inner.grid_columnconfigure(1, weight=1)
+        inner.grid_columnconfigure(2, weight=0)
+        inner.grid_columnconfigure(3, weight=1)
 
-    def _status_message_row(self, parent: Frame, key: str) -> Label:
-        block = Frame(parent, bg="#1e293b")
-        block.pack(fill=X, pady=(6, 0))
+    def _grid_cell_key(self, inner: Frame, bg: str, row: int, col: int, text: str) -> None:
         Label(
-            block,
-            text=key,
-            bg="#1e293b",
+            inner,
+            text=text,
+            bg=bg,
             fg="#94a3b8",
             font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w")
-        value = Label(
-            block,
-            text="—",
-            bg="#1e293b",
-            fg="#64748b",
-            font=("Segoe UI", 12),
-            justify="left",
-            wraplength=720,
-        )
-        value.pack(anchor="w", pady=(4, 0))
-        return value
+            anchor="w",
+        ).grid(row=row, column=col, sticky=W, padx=(0, 8), pady=3)
+
+    def _grid_cell_value_var(
+        self,
+        inner: Frame,
+        bg: str,
+        row: int,
+        col: int,
+        var: StringVar,
+        *,
+        wraplength: int = 0,
+    ) -> Label:
+        kw: dict = {
+            "textvariable": var,
+            "bg": bg,
+            "fg": "#f8fafc",
+            "font": ("Segoe UI", 12, "bold"),
+            "anchor": "w",
+        }
+        if wraplength > 0:
+            kw["wraplength"] = wraplength
+            kw["justify"] = "left"
+        label = Label(inner, **kw)
+        label.grid(row=row, column=col, sticky=W + E, padx=(0, 16), pady=3)
+        return label
+
+    def _grid_cell_value_plain(
+        self,
+        inner: Frame,
+        bg: str,
+        row: int,
+        col: int,
+        *,
+        font: object = ("Segoe UI", 12, "bold"),
+        initial_fg: str = "#f8fafc",
+        wraplength: int = 0,
+    ) -> Label:
+        kw: dict = {"text": "—", "bg": bg, "fg": initial_fg, "font": font, "anchor": "w"}
+        if wraplength > 0:
+            kw["wraplength"] = wraplength
+            kw["justify"] = "left"
+        label = Label(inner, **kw)
+        label.grid(row=row, column=col, sticky=W + E, padx=(0, 16), pady=3)
+        return label
 
     def _build_change_pen_card(self, parent: Frame) -> None:
         Label(
@@ -377,29 +408,6 @@ class PenKioskApp:
             font=("Segoe UI", 14, "bold"),
             cursor="hand2",
         ).pack(fill=X, pady=(2, 0))
-
-    def _metric_row(self, parent: Frame, key: str, value: StringVar, *, bg: str = "#111827") -> None:
-        row = Frame(parent, bg=bg)
-        row.pack(fill=X, pady=3)
-        Label(
-            row,
-            text=key,
-            bg=bg,
-            fg="#94a3b8",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side=LEFT)
-        Label(
-            row,
-            textvariable=value,
-            bg=bg,
-            fg="#f8fafc",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side=RIGHT)
-
-    _SWITCH_KNOB_POS = (
-        (8, 12, 56, 32),
-        (80, 12, 128, 32),
-    )
 
     def _move_switch_knob(self, idx: int) -> None:
         if self._switch_canvas is None or self._switch_knob is None:
