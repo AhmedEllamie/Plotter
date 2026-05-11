@@ -112,6 +112,9 @@ class PenKioskApp:
         self._bulk_stop_value = StringVar(value="No")
         self._max_pen_distance_var = StringVar(value="")
         self._inline_error_var = StringVar(value="")
+        self._api_feedback_code_var = StringVar(value="")
+        self._api_feedback_message_var = StringVar(value="")
+        self._api_feedback_message_label: Label | None = None
 
         self._mode_label_var = StringVar(value="Status")
         self._plotter_badge_label: Label | None = None
@@ -233,6 +236,40 @@ class PenKioskApp:
         self._plotter_badge_label.pack(side=LEFT, padx=(0, 8))
         self._busy_badge_label = self._badge(badges_row, ok=True)
         self._busy_badge_label.pack(side=LEFT)
+
+        Label(
+            parent,
+            text="Last API error",
+            bg="#111827",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(8, 2))
+        code_row = Frame(parent, bg="#111827")
+        code_row.pack(fill=X, pady=(0, 2))
+        Label(
+            code_row,
+            text="Code",
+            bg="#111827",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(side=LEFT)
+        Label(
+            code_row,
+            textvariable=self._api_feedback_code_var,
+            bg="#111827",
+            fg="#fecaca",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(side=RIGHT)
+        self._api_feedback_message_label = Label(
+            parent,
+            textvariable=self._api_feedback_message_var,
+            bg="#111827",
+            fg="#fecaca",
+            font=("Segoe UI", 12),
+            justify="left",
+            wraplength=720,
+        )
+        self._api_feedback_message_label.pack(anchor="w", pady=(0, 8))
 
         self._metric_row(parent, "Cumulative distance", self._cumulative_distance_value)
         self._metric_row(parent, "Executed distance", self._executed_distance_value)
@@ -459,13 +496,26 @@ class PenKioskApp:
 
             if max_pen_distance > 0 and not self._max_pen_distance_var.get().strip():
                 self._max_pen_distance_var.set(str(max_pen_distance))
+
+            lc = status.get("lastApiErrorCode")
+            lm = status.get("lastApiErrorMessage")
+            if lc is not None and lm not in (None, ""):
+                try:
+                    code_str = str(int(lc))
+                except (TypeError, ValueError):
+                    code_str = str(lc)
+                self._append_feedback(str(lm), is_error=True, error_code=code_str)
+            else:
+                self._api_feedback_code_var.set("")
+                self._api_feedback_message_var.set("")
         except HTTPError as ex:
             self._http_ok = False
             self._plotter_connected = False
             self._set_badge_color(self._server_badge_label, f"Server: HTTP {ex.code}", False)
             self._set_badge_color(self._plotter_badge_label, "Plotter: —", False)
             self._set_link_lamp(False)
-            self._append_feedback(f"Status HTTP error: {ex.code}", is_error=True)
+            code, msg = self._decode_http_error(ex)
+            self._append_feedback(msg or f"Status HTTP error: {ex.code}", is_error=True, error_code=code)
         except URLError as ex:
             self._http_ok = False
             self._plotter_connected = False
@@ -483,6 +533,24 @@ class PenKioskApp:
 
         self._update_link_detail_line()
         self._current_ip_var.set(_local_ipv4s_for_display())
+
+    @staticmethod
+    def _decode_http_error(ex: HTTPError) -> tuple[str | None, str]:
+        try:
+            body = ex.read().decode("utf-8", errors="ignore")
+            data = json.loads(body) if body.strip() else {}
+            if isinstance(data, dict):
+                raw_code = data.get("errorCode")
+                msg = data.get("message")
+                if isinstance(msg, str):
+                    if isinstance(raw_code, int):
+                        return str(raw_code), msg
+                    if isinstance(raw_code, str) and raw_code.isdigit():
+                        return raw_code, msg
+                    return None, msg
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return None, f"HTTP {ex.code} {ex.reason}"
 
     def _request_headers(self, *, json_body: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -561,18 +629,35 @@ class PenKioskApp:
             self._api_busy = True
             try:
                 self._api_post(endpoint, {})
-                self._root.after(0, lambda m=success_message: self._append_feedback(m))
+                self._root.after(0, lambda m=success_message: self._append_feedback(m, is_error=False))
                 self._root.after(0, self._refresh_status_now)
+            except HTTPError as ex:
+                code, msg = self._decode_http_error(ex)
+                self._root.after(
+                    0,
+                    lambda c=code, m=msg, sc=ex.code: self._append_feedback(
+                        m or f"HTTP {sc}", is_error=True, error_code=c
+                    ),
+                )
             except Exception as ex:
-                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
+                self._root.after(0, lambda err=str(ex): self._append_feedback(err, is_error=True))
             finally:
                 self._api_busy = False
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _append_feedback(self, message: str, is_error: bool = False) -> None:
-        _ = message
-        _ = is_error
+    def _append_feedback(self, message: str, is_error: bool = False, error_code: str | None = None) -> None:
+        trimmed = (message or "").strip()[:800]
+        if is_error:
+            self._api_feedback_code_var.set((error_code or "").strip())
+            self._api_feedback_message_var.set(trimmed)
+            if self._api_feedback_message_label is not None:
+                self._api_feedback_message_label.configure(fg="#fecaca")
+            return
+        self._api_feedback_code_var.set("")
+        self._api_feedback_message_var.set(trimmed)
+        if self._api_feedback_message_label is not None:
+            self._api_feedback_message_label.configure(fg="#86efac")
 
     def _set_max_pen_distance(self) -> None:
         raw_value = self._max_pen_distance_var.get().strip()
@@ -590,11 +675,19 @@ class PenKioskApp:
         def worker() -> None:
             self._api_busy = True
             try:
-                self._api_post("/api/config/pen-max-distance", {"meters": meters})
-                self._root.after(0, lambda: self._append_feedback("Max pen distance updated."))
+                self._api_post("/api/config/pen-distance", {"meters": meters})
+                self._root.after(0, lambda: self._append_feedback("Max pen distance updated.", is_error=False))
                 self._root.after(0, self._refresh_status_now)
+            except HTTPError as ex:
+                code, msg = self._decode_http_error(ex)
+                self._root.after(
+                    0,
+                    lambda c=code, m=msg, sc=ex.code: self._append_feedback(
+                        m or f"HTTP {sc}", is_error=True, error_code=c
+                    ),
+                )
             except Exception as ex:
-                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
+                self._root.after(0, lambda err=str(ex): self._append_feedback(err, is_error=True))
             finally:
                 self._api_busy = False
 
@@ -607,11 +700,19 @@ class PenKioskApp:
         def worker() -> None:
             self._api_busy = True
             try:
-                self._api_post("/api/config/reset", {})
-                self._root.after(0, lambda: self._append_feedback("Distance reset completed."))
+                self._api_post("/api/config/pen-distance", {"resetCumulative": True})
+                self._root.after(0, lambda: self._append_feedback("Distance reset completed.", is_error=False))
                 self._root.after(0, self._refresh_status_now)
+            except HTTPError as ex:
+                code, msg = self._decode_http_error(ex)
+                self._root.after(
+                    0,
+                    lambda c=code, m=msg, sc=ex.code: self._append_feedback(
+                        m or f"HTTP {sc}", is_error=True, error_code=c
+                    ),
+                )
             except Exception as ex:
-                self._root.after(0, lambda err=ex: self._append_feedback(str(err), is_error=True))
+                self._root.after(0, lambda err=str(ex): self._append_feedback(err, is_error=True))
             finally:
                 self._api_busy = False
 

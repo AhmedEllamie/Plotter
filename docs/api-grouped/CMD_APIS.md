@@ -68,7 +68,7 @@ Prints one job. Requires a fresh multipart SVG on every request; the server clea
 - Requires header: `X-API-Key`.
 
 ### Response
-- **200**: job ran immediately — `queued: false`, `jobId`, `svgFileName`, `commandCount`, `result`, `status`.
+- **200**: job ran immediately — `queued: false`, `jobId`, `svgFileName`, `commandCount`, slim **`result`** (`commands_sent`, `cumulative_distance_mm`, `executed_distance_mm`, `execution_percent`, `job_stopped`).
 - **202**: printer busy — `queued: true`, `jobId`, `queuePosition`, `jobType`, `signatureSha256`, `svgFileName`.
 
 ### Error codes
@@ -92,7 +92,7 @@ Send multipart form: `svg`, `copies` (1–100), and `printRequestJson` (optional
 - Requires header: `X-API-Key`.
 
 ### Response
-- **200** or **202** (same shape as single print); bulk payload includes `copies`, `bulkProgress`, `result` with `copies` / `total_commands_sent`.
+- **200** or **202** (same queue shape as single print). On **200**, bulk adds **`bulkProgress`**; **`result`** is slim (`cumulative_distance_mm`, `execution_percent`, `total_commands_sent`). No top-level **`copies`** on 200 (see `bulkProgress.requestedTotal`).
 
 ### Error codes
 - `PRINTER_STATE_ERROR` (409)

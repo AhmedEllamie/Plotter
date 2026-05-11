@@ -515,7 +515,7 @@ async function runChangePen() {
 async function runReset() {
   appendConfigLog("Resetting distance stats...");
   try {
-    await apiPostJson("/api/config/reset", {});
+    await apiPostJson("/api/config/pen-distance", { resetCumulative: true });
     showConfigMessage("Distance reset completed.");
     appendConfigLog("Distance reset completed.");
   } catch (error) {
@@ -533,7 +533,7 @@ async function setPenMaxDistance() {
   }
   appendConfigLog(`Updating pen max distance to ${rawValue}m...`);
   try {
-    await apiPostJson("/api/config/pen-max-distance", { meters: Number(rawValue) });
+    await apiPostJson("/api/config/pen-distance", { meters: Number(rawValue) });
     persistPrintSettings();
     showConfigMessage("Pen max distance updated.");
     appendConfigLog(`Pen max distance updated to ${rawValue}m.`);

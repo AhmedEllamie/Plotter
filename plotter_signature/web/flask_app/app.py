@@ -24,6 +24,7 @@ from flask import Flask, Response, request, send_file, send_from_directory
 
 from plotter_signature.dependency_injection import ServiceProvider, get_service_provider
 from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool
+from plotter_signature.infrastructure.errors.api_error_codes import numeric_code_for_legacy
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
     API_KEY_REQUIRED_MESSAGE,
@@ -34,6 +35,7 @@ from plotter_signature.infrastructure.security.api_key_auth import (
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 from plotter_signature.web.flask_app.config import ScannerServiceSettings, load_capture_settings, load_scanner_service_settings
 from plotter_signature.web.flask_app.response import api_error, api_success
+from plotter_signature.web.last_api_error import get_last_api_error
 from plotter_signature.web.flask_app.state import RuntimeState
 from plotter_signature.web.startup_serial import run_startup_autoconnect
 
@@ -77,7 +79,74 @@ def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
     payload.pop("port_name", None)
     payload.pop("is_open", None)
     payload["printer_connected"] = provider.printer_service.is_open
+    last = get_last_api_error()
+    if last is None:
+        payload["lastApiErrorCode"] = None
+        payload["lastApiErrorMessage"] = None
+        payload["lastApiErrorAt"] = None
+    else:
+        payload["lastApiErrorCode"] = last.error_code
+        payload["lastApiErrorMessage"] = last.message
+        payload["lastApiErrorAt"] = last.at
     return payload
+
+
+_SLIM_SINGLE_PRINT_RESULT_KEYS = (
+    "commands_sent",
+    "cumulative_distance_mm",
+    "executed_distance_mm",
+    "execution_percent",
+    "job_stopped",
+)
+
+_SLIM_BULK_RESULT_KEYS = (
+    "cumulative_distance_mm",
+    "execution_percent",
+    "total_commands_sent",
+)
+
+
+def _slim_single_print_result(d: dict[str, Any]) -> dict[str, Any]:
+    return {k: d[k] for k in _SLIM_SINGLE_PRINT_RESULT_KEYS if k in d}
+
+
+def _slim_bulk_result(d: dict[str, Any]) -> dict[str, Any]:
+    return {k: d[k] for k in _SLIM_BULK_RESULT_KEYS if k in d}
+
+
+def _compact_print_history_item(row: dict[str, Any]) -> dict[str, Any]:
+    keep_top = (
+        "id",
+        "job_type",
+        "status",
+        "signature_file_name",
+        "signature_sha256",
+        "copies_requested",
+        "copies_printed",
+        "queued_at",
+        "completed_at",
+    )
+    out: dict[str, Any] = {k: row[k] for k in keep_top if k in row}
+    err = row.get("error_message")
+    if err:
+        out["error_message"] = err
+    result = row.get("result")
+    inner: dict[str, Any] | None = None
+    bulk_progress: dict[str, Any] | None = None
+    if isinstance(result, dict):
+        payload = result.get("payload")
+        if isinstance(payload, dict):
+            bulk_progress = payload.get("bulkProgress") if isinstance(payload.get("bulkProgress"), dict) else None
+            raw_inner = payload.get("result")
+            if isinstance(raw_inner, dict):
+                if row.get("job_type") == "bulk":
+                    inner = _slim_bulk_result(raw_inner)
+                else:
+                    inner = _slim_single_print_result(raw_inner)
+    out["result"] = inner
+    if bulk_progress is not None:
+        out["bulkProgress"] = bulk_progress
+    return out
 
 
 def _capture_profile_to_scanner_session_payload(capture: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -456,9 +525,8 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 final_status = "stopped" if copies_printed < job.copies else "completed"
                 data = {
                     "svgFileName": job.svg_file_name,
-                    "copies": job.copies,
                     "commandCount": len(gcode),
-                    "result": asdict(print_result),
+                    "result": _slim_bulk_result(asdict(print_result)),
                     "bulkProgress": {
                         "requestedTotal": job.copies,
                         "printedCount": copies_printed,
@@ -472,7 +540,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 data = {
                     "svgFileName": job.svg_file_name,
                     "commandCount": len(gcode),
-                    "result": asdict(print_result),
+                    "result": _slim_single_print_result(asdict(print_result)),
                 }
             provider.print_history_store.update_completed(
                 job.job_id,
@@ -891,6 +959,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                             state="timeout",
                             completedAt=datetime.now(timezone.utc).isoformat(),
                             error="Capture status polling timed out.",
+                            errorCode=numeric_code_for_legacy("CAPTURE_JOB_TIMEOUT"),
                         )
                         return
                     raise RuntimeError(
@@ -922,7 +991,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     state="failed",
                     completedAt=datetime.now(timezone.utc).isoformat(),
                     error=f"Scanner request failed with HTTP {ex.code}.",
-                    errorCode="SCANNER_HTTP_ERROR",
+                    errorCode=numeric_code_for_legacy("SCANNER_HTTP_ERROR"),
                     details={"statusCode": ex.code, "responseBody": body[:4000]},
                 )
             except URLError as ex:
@@ -931,7 +1000,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     state="failed",
                     completedAt=datetime.now(timezone.utc).isoformat(),
                     error=f"Failed to reach scanner service: {ex}",
-                    errorCode="SCANNER_UNREACHABLE",
+                    errorCode=numeric_code_for_legacy("SCANNER_UNREACHABLE"),
                 )
             except Exception as ex:
                 _capture_job_update(
@@ -939,7 +1008,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     state="failed",
                     completedAt=datetime.now(timezone.utc).isoformat(),
                     error=str(ex),
-                    errorCode="SCANNER_CAPTURE_FAILED",
+                    errorCode=numeric_code_for_legacy("SCANNER_CAPTURE_FAILED"),
                 )
 
         @app.post("/api/config/scanner/capture/start")
@@ -1243,21 +1312,110 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return change_pen_start()
         return change_pen_finish()
 
-    @app.post("/api/config/reset")
-    def reset() -> tuple[Response, int]:
-        if provider.printer_service.is_busy:
+    def _pen_distance_slim_response_data(stats: dict[str, float], *, reset_ran: bool) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "maxPenDistanceM": stats["maxPenDistanceM"],
+            "remainingPenPercent": stats["remainingPenPercent"],
+        }
+        if reset_ran:
+            data["cumulativeDistanceMm"] = stats["cumulativeDistanceMm"]
+        return data
+
+    def _apply_pen_distance_config(
+        *,
+        reset_cumulative: bool,
+        max_meters: float | None,
+    ) -> tuple[dict[str, float], bool, bool]:
+        if reset_cumulative and provider.printer_service.is_busy:
+            raise RuntimeError("Cannot reset while printer is busy.")
+
+        did_reset = False
+        did_set_max = False
+        stats: dict[str, float] = provider.printer_service.get_distance_stats()
+
+        if reset_cumulative:
+            stats = provider.printer_service.reset_cumulative_distance()
+            did_reset = True
+        if max_meters is not None:
+            stats = provider.printer_service.set_max_pen_distance_m(max_meters)
+            did_set_max = True
+
+        return stats, did_reset, did_set_max
+
+    @app.post("/api/config/pen-distance")
+    def pen_distance() -> tuple[Response, int]:
+        payload = _get_json_dict() or request.form.to_dict(flat=True)
+        reset_cumulative = parse_bool(payload.get("resetCumulative"), default=False)
+        raw_meters = payload.get("meters") or payload.get("maxPenDistanceM")
+        max_meters: float | None = None
+        if raw_meters is not None and str(raw_meters).strip() != "":
+            try:
+                max_meters = float(raw_meters)
+            except (TypeError, ValueError):
+                return api_error(
+                    "meters (or maxPenDistanceM) must be a number.",
+                    error_code="PEN_MAX_DISTANCE_INVALID",
+                    status_code=400,
+                )
+
+        if not reset_cumulative and max_meters is None:
             return api_error(
-                "Cannot reset while printer is busy.",
-                error_code="PRINTER_BUSY",
-                status_code=409,
+                "Provide resetCumulative: true and/or meters (or maxPenDistanceM).",
+                error_code="PEN_DISTANCE_NO_ACTION",
+                status_code=400,
             )
 
-        payload = _get_json_dict()
         try:
-            stats = provider.printer_service.reset_cumulative_distance()
-            max_pen_distance = payload.get("maxPenDistanceM")
-            if max_pen_distance is not None:
-                stats = provider.printer_service.set_max_pen_distance_m(float(max_pen_distance))
+            stats, did_reset, did_set_max = _apply_pen_distance_config(
+                reset_cumulative=reset_cumulative,
+                max_meters=max_meters,
+            )
+        except RuntimeError as ex:
+            return api_error(str(ex), error_code="PRINTER_BUSY", status_code=409)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PEN_MAX_DISTANCE_INVALID", status_code=400)
+        except Exception as ex:
+            if reset_cumulative and max_meters is None:
+                return api_error(f"Reset failed: {ex}", error_code="RESET_FAILED", status_code=500)
+            if not reset_cumulative and max_meters is not None:
+                return api_error(
+                    f"Failed to set max pen distance: {ex}",
+                    error_code="PEN_MAX_DISTANCE_FAILED",
+                    status_code=500,
+                )
+            return api_error(f"Pen distance update failed: {ex}", error_code="RESET_FAILED", status_code=500)
+
+        if did_reset and did_set_max:
+            message = "Cumulative distance reset and max pen distance updated."
+        elif did_reset:
+            message = "Printer distance stats reset."
+        else:
+            message = "Max pen distance updated."
+
+        return api_success(
+            message=message,
+            data=_pen_distance_slim_response_data(stats, reset_ran=did_reset),
+        )
+
+    @app.post("/api/config/reset")
+    def reset() -> tuple[Response, int]:
+        payload = _get_json_dict()
+        raw_max = payload.get("maxPenDistanceM")
+        max_meters: float | None = None
+        if raw_max is not None and str(raw_max).strip() != "":
+            try:
+                max_meters = float(raw_max)
+            except (TypeError, ValueError):
+                return api_error(
+                    "maxPenDistanceM must be a number.",
+                    error_code="RESET_VALIDATION_ERROR",
+                    status_code=400,
+                )
+
+        try:
+            stats, _, _ = _apply_pen_distance_config(reset_cumulative=True, max_meters=max_meters)
+        except RuntimeError as ex:
+            return api_error(str(ex), error_code="PRINTER_BUSY", status_code=409)
         except ValueError as ex:
             return api_error(str(ex), error_code="RESET_VALIDATION_ERROR", status_code=400)
         except Exception as ex:
@@ -1279,7 +1437,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 status_code=400,
             )
         try:
-            stats = provider.printer_service.set_max_pen_distance_m(float(raw_meters))
+            stats, _, _ = _apply_pen_distance_config(reset_cumulative=False, max_meters=float(raw_meters))
         except ValueError as ex:
             return api_error(str(ex), error_code="PEN_MAX_DISTANCE_INVALID", status_code=400)
         except Exception as ex:
@@ -1465,6 +1623,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except ValueError:
             return api_error("days and limit must be integers.", error_code="INVALID_QUERY", status_code=400)
         items = provider.print_history_store.list_since(days=days, limit=limit)
+        compact = parse_bool(request.args.get("compact"), default=False)
+        if compact:
+            items = [_compact_print_history_item(dict(x)) for x in items]
         return api_success(
             message="Print history loaded.",
             data={"items": items, "days": days, "limit": limit},

@@ -24,8 +24,9 @@ These files describe historical **short** paths (e.g. `/api/health`). The live F
 - [POST /api/change-pen/start](POST_api_change_pen_start.md) → `POST /api/config/change-pen/start`
 - [POST /api/change-pen/finish](POST_api_change_pen_finish.md) → `POST /api/config/change-pen/finish`
 - [POST /api/change-pen](POST_api_change_pen.md) → `POST /api/config/change-pen`
-- [POST /api/reset](POST_api_reset.md) → `POST /api/config/reset`
-- [POST /api/pen-max-distance](POST_api_pen_max_distance.md) → `POST /api/config/pen-max-distance`
+- [POST /api/reset](POST_api_reset.md) → `POST /api/config/reset` (legacy; prefer `POST /api/config/pen-distance` with `resetCumulative`)
+- [POST /api/pen-max-distance](POST_api_pen_max_distance.md) → `POST /api/config/pen-max-distance` (legacy; prefer `POST /api/config/pen-distance` with `meters` / `maxPenDistanceM`)
+- **Unified:** live app **`POST /api/config/pen-distance`** (see `API_REFERENCE.md`)
 - [POST /api/scanner/capture-manual](POST_api_scanner_capture_manual.md) → `POST /api/config/scanner/capture-manual`
 - [POST /api/capture](POST_api_capture.md) → `POST /api/config/capture`
 - [GET /api/capture/latest](GET_api_capture_latest.md) → `GET /api/config/capture/latest`

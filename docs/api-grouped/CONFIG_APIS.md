@@ -12,7 +12,7 @@ Common error envelope:
 - `success: false`
 - `message: string`
 - `data: null`
-- `errorCode: string`
+- `errorCode: integer` (see [API_REFERENCE.md](../API_REFERENCE.md#api-error-code-registry))
 - `details: object` (optional)
 
 ## `GET /api/config`
@@ -86,35 +86,63 @@ Pen change control endpoints (`start`, `finish`, or mode-based dispatcher).
 - `PEN_CHANGE_FINISH_FAILED` (500)
 - `INVALID_PEN_MODE` (400) (`/change-pen`)
 
-## `POST /api/config/reset`
+## `POST /api/config/pen-distance`
 ### Description
-Resets distance stats and optional max pen distance update.
+**Primary** pen maintenance endpoint: optional cumulative distance reset and/or max pen distance (meters). Same auth as other config routes.
+### How to use
+JSON or form: `resetCumulative` (boolean, default false), and/or `meters` or `maxPenDistanceM` (number &gt; 0). At least one action required or **`PEN_DISTANCE_NO_ACTION`** (`400`).
+### What it takes
+- Requires `X-API-Key`.
+### Response
+- Slim **`data`**: `maxPenDistanceM`, `remainingPenPercent`, and `cumulativeDistanceMm` when reset ran.
+### Error codes
+- `PEN_DISTANCE_NO_ACTION` (400)
+- `PRINTER_BUSY` (409) when reset requested while busy
+- `PEN_MAX_DISTANCE_INVALID` / `PEN_MAX_DISTANCE_FAILED` / `RESET_FAILED` as applicable
+
+## `POST /api/config/reset` (legacy)
+### Description
+Same as **`pen-distance`** with `resetCumulative: true` (optional `maxPenDistanceM`). Prefer **`POST /api/config/pen-distance`** for new integrations.
 ### How to use
 Send optional `maxPenDistanceM`.
 ### What it takes
 - JSON body optional.
 - Requires `X-API-Key` when server auth is enabled.
 ### Response
-- **`data`** with **`maxPenDistanceM`**; full distance fields: `GET /api/cmd/status`.
+- **`data`** with **`maxPenDistanceM`** only; full distance fields: `GET /api/cmd/status`.
 ### Error codes
 - `PRINTER_BUSY` (409)
 - `RESET_VALIDATION_ERROR` (400)
 - `RESET_FAILED` (500)
 
-## `POST /api/config/pen-max-distance`
+## `POST /api/config/pen-max-distance` (legacy)
 ### Description
-Sets max pen distance threshold in meters.
+Same as **`pen-distance`** with max field only. Prefer **`POST /api/config/pen-distance`** with `meters` / `maxPenDistanceM`.
 ### How to use
 Send `meters` (or `maxPenDistanceM`).
 ### What it takes
 - JSON/form payload.
 - Requires `X-API-Key`.
 ### Response
-- `stats`.
+- `stats` (full distance stats object).
 ### Error codes
 - `PEN_MAX_DISTANCE_REQUIRED` (400)
 - `PEN_MAX_DISTANCE_INVALID` (400)
 - `PEN_MAX_DISTANCE_FAILED` (500)
+
+## `GET /api/config/ui-profile` / `POST /api/config/ui-profile`
+### Description
+Load or save the configuration UI profile (`print` + `capture` sections, and `updatedAt` on read/save).
+### How to use
+- **GET:** no body.
+- **POST:** JSON body must be the profile object with **top-level** `capture` and `print` — the same shape as **`data`** from GET, **not** wrapped in `{ "success", "data", ... }`. Nesting only under `data` causes `capture`/`print` to be ignored and defaults to apply (e.g. empty `quad_points`).
+### What it takes
+- Requires `X-API-Key`.
+### Response
+- Full profile; POST may add **`scannerApplyWarning`** if scanner apply fails after save.
+### Error codes
+- `UI_PROFILE_REQUIRED` (400)
+- `UI_PROFILE_SAVE_FAILED` (500)
 
 ## `GET /api/config/scanner/stream.mjpg`
 ### Description
@@ -190,10 +218,10 @@ Advanced clients that want metadata only (no base64 image) omit `includeDataUri`
 Lists persisted print/bulk job history from SQLite (default **last 30 days**). Each row includes timestamps, `job_type` (`print` / `bulk`), status, signature file name, SHA-256, copies requested/printed, and optional `result` snapshot.
 
 ### How to use
-Dashboard or auditing; query `days` (default 30) and `limit` (default 500, max 2000).
+Dashboard or auditing; query `days` (default 30), `limit` (default 500, max 2000), optional **`compact=1`** for trimmed items (no `started_at`, unwrap slim `result` / `bulkProgress`).
 
 ### What it takes
-- Query: `days`, `limit` (optional).
+- Query: `days`, `limit`, `compact` (optional).
 - Requires `X-API-Key`.
 
 ### Response

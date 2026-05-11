@@ -39,9 +39,9 @@ All JSON success bodies wrap payloads in the [standard envelope](#global-envelop
 | Field       | Type                    | Description                                               |
 | ----------- | ----------------------- | --------------------------------------------------------- |
 | `success`   | `boolean`               | `true` if the call succeeded.                             |
-| `message`   | `string`                | Human-readable summary.                                   |
+| `message`   | `string`                | Human-readable summary. On errors, legacy machine tokens (e.g. `UNAUTHORIZED`) are folded into this field as **`[TOKEN] ...`** after the opening bracket. |
 | `data`      | `object | array | null` | Payload; `null` on many errors.                           |
-| `errorCode` | `string | null`         | Machine code on failure; `null` on success.               |
+| `errorCode` | `integer \| null`      | Stable numeric code on failure (see [registry](#api-error-code-registry)); `null` on success. |
 | `details`   | `object | null`         | Optional extra context (e.g. upstream HTTP body snippet). |
 
 
@@ -57,14 +57,79 @@ Host: 127.0.0.1:5000
 ```json
 {
   "success": false,
-  "message": "Invalid X-API-Key header.",
+  "message": "[UNAUTHORIZED] Invalid X-API-Key header.",
   "data": null,
-  "errorCode": "UNAUTHORIZED",
+  "errorCode": 1037,
   "details": null
 }
 ```
 
 HTTP status: `401`.
+
+### API error code registry
+
+All failing JSON responses that use the standard envelope expose a numeric top-level **`errorCode`**. The same integer is assigned per legacy string key (for documentation and logs). Unknown legacy keys at the server resolve to **`0`**; the raw token still appears inside **`message`** when applicable.
+
+| `errorCode` | Legacy token |
+| ----------: | ------------ |
+| 1001 | `BULK_PRINT_FAILED` |
+| 1002 | `BULK_STOP_FAILED` |
+| 1003 | `CAPTURE_JOB_NOT_FOUND` |
+| 1004 | `CAPTURE_JOB_TIMEOUT` |
+| 1005 | `CAPTURE_NOT_FOUND` |
+| 1006 | `CAPTURE_PAYLOAD_INVALID` |
+| 1007 | `CAPTURE_UPLOAD_FAILED` |
+| 1008 | `EMPTY_SVG` |
+| 1009 | `FASTAPI_CLIENT_ERROR` |
+| 1010 | `FASTAPI_SERVER_ERROR` |
+| 1011 | `INVALID_PEN_MODE` |
+| 1012 | `INVALID_QUERY` |
+| 1013 | `PEN_CHANGE_FINISH_FAILED` |
+| 1014 | `PEN_CHANGE_START_FAILED` |
+| 1015 | `PEN_CHANGE_STATE_ERROR` |
+| 1016 | `PEN_MAX_DISTANCE_FAILED` |
+| 1017 | `PEN_MAX_DISTANCE_INVALID` |
+| 1018 | `PEN_MAX_DISTANCE_REQUIRED` |
+| 1019 | `PRINT_FAILED` |
+| 1020 | `PRINT_RUNTIME_ERROR` |
+| 1021 | `PRINT_VALIDATION_ERROR` |
+| 1022 | `PRINTER_BUSY` |
+| 1023 | `PRINTER_NOT_BUSY` |
+| 1024 | `PRINTER_STATE_ERROR` |
+| 1025 | `RESET_FAILED` |
+| 1026 | `RESET_VALIDATION_ERROR` |
+| 1027 | `SCANNER_CAPTURE_FAILED` |
+| 1028 | `SCANNER_CONFIG_REQUIRED` |
+| 1029 | `SCANNER_HTTP_ERROR` |
+| 1030 | `SCANNER_STREAM_FAILED` |
+| 1031 | `SCANNER_STREAM_HTTP_ERROR` |
+| 1032 | `SCANNER_STREAM_UNREACHABLE` |
+| 1033 | `SCANNER_UNREACHABLE` |
+| 1034 | `SVG_REQUIRED` |
+| 1035 | `UI_PROFILE_REQUIRED` |
+| 1036 | `UI_PROFILE_SAVE_FAILED` |
+| 1037 | `UNAUTHORIZED` |
+| 1038 | `VOID_BUSY` |
+| 1039 | `VOID_FAILED` |
+| 1040 | `VOID_RUNTIME_ERROR` |
+| 1041 | `PEN_DISTANCE_NO_ACTION` |
+| 0 | _(unregistered / unknown legacy key)_ |
+
+Implementation: `[api_error_codes.py](../plotter-signature/plotter_signature/infrastructure/errors/api_error_codes.py)`.
+
+### Last API error snapshot (`GET /api/cmd/status`)
+
+The server keeps a thread-safe **last API error** record (updated whenever any route returns an error through the shared `api_error` helper). Successful **mutating** responses (`POST`, `PUT`, `PATCH`, `DELETE`) clear this snapshot; **`GET`** and **`HEAD`** success responses do **not** clear it, so operators can still see recent failures while polling status.
+
+The current snapshot is merged into **`GET /api/cmd/status`** success payload as:
+
+| Field                  | Type                 | Description |
+| ---------------------- | -------------------- | ----------- |
+| `lastApiErrorCode`     | `integer \| null`    | Numeric code (same scheme as top-level envelope), or `null`. |
+| `lastApiErrorMessage`  | `string \| null`     | Full message string (includes `[TOKEN]` prefix when applicable), or `null`. |
+| `lastApiErrorAt`       | `string \| null`     | ISO-8601 UTC timestamp when the error was recorded, or `null`. |
+
+These fields describe the **last recorded failure**, not an error in the status response itself (which remains `200` / `success: true` when the status call succeeds).
 
 ### Authentication (all `/api/*` routes)
 
@@ -81,9 +146,9 @@ HTTP status: `401`.
 All `/api/*` routes require a matching **`X-API-Key`** header, **except** the scanner stream which may also use the **`token`** query parameter as described above (missing or invalid → **401**).
 
 
-| `errorCode`           | HTTP | Meaning               |
-| --------------------- | ---- | --------------------- |
-| `UNAUTHORIZED`        | 401  | Missing or wrong key. |
+| `errorCode` (numeric) | Legacy token | HTTP | Meaning |
+| ---------------------: | ------------ | --- | ----- |
+| 1037 | `UNAUTHORIZED` | 401 | Missing or wrong key. |
 
 
 ### Changing the server API key
@@ -188,6 +253,9 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 | `max_pen_distance_m`            | `number`  | Configured max pen travel (meters).                       |
 | `used_pen_distance_m`           | `number`  | `cumulative_distance_mm / 1000`.                          |
 | `remaining_pen_percent`         | `number`  | Estimated remaining pen life (percent).                   |
+| `lastApiErrorCode`              | `integer \| null` | Last recorded API error code (see [snapshot](#last-api-error-snapshot-get-apicmdstatus)); `null` if none. |
+| `lastApiErrorMessage`          | `string \| null`  | Message for that error (includes `[TOKEN]` when applicable). |
+| `lastApiErrorAt`                | `string \| null`  | ISO-8601 UTC when that error was recorded. |
 
 
 **HTTP:** `200`
@@ -217,7 +285,10 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
     "cumulative_distance_mm": 12450.25,
     "max_pen_distance_m": 2.5,
     "used_pen_distance_m": 12.450,
-    "remaining_pen_percent": 90.12
+    "remaining_pen_percent": 90.12,
+    "lastApiErrorCode": null,
+    "lastApiErrorMessage": null,
+    "lastApiErrorAt": null
   },
   "errorCode": null,
   "details": null
@@ -250,8 +321,7 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 | `jobType`      | `string`  | `"print"`.                                                       |
 | `svgFileName`  | `string`  | Original upload name.                                            |
 | `commandCount` | `integer` | G-code line count.                                               |
-| `result`       | `object`  | `[PrintResponse](#printresponse-as-json)`.                       |
-| `status`       | `object`  | Same shape as `[GET /api/cmd/status](#get-apicmdstatus)` `data`. |
+| `result`       | `object`  | Slim print summary: `commands_sent`, `cumulative_distance_mm`, `executed_distance_mm`, `execution_percent`, `job_stopped`. |
 
 
 **Queued `data` (HTTP `202`)**
@@ -270,14 +340,14 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 **Error `errorCode`**
 
 
-| Code                     | HTTP | Description                                  |
-| ------------------------ | ---- | -------------------------------------------- |
-| `PRINTER_STATE_ERROR`    | 409  | Not connected.                               |
-| `SVG_REQUIRED`           | 400  | Missing `svg` part.                          |
-| `EMPTY_SVG`              | 400  | Zero-length file.                            |
-| `PRINT_VALIDATION_ERROR` | 400  | Bad scale/rotation/copies or SVG conversion. |
-| `PRINT_RUNTIME_ERROR`    | 400  | Runtime error in job.                        |
-| `PRINT_FAILED`           | 500  | Unexpected failure.                          |
+| Code | Legacy token | HTTP | Description                                  |
+| ---- | ------------ | ---- | -------------------------------------------- |
+| 1024 | `PRINTER_STATE_ERROR` | 409 | Not connected.                               |
+| 1034 | `SVG_REQUIRED` | 400 | Missing `svg` part.                          |
+| 1008 | `EMPTY_SVG` | 400 | Zero-length file.                            |
+| 1021 | `PRINT_VALIDATION_ERROR` | 400 | Bad scale/rotation/copies or SVG conversion. |
+| 1020 | `PRINT_RUNTIME_ERROR` | 400 | Runtime error in job.                        |
+| 1019 | `PRINT_FAILED` | 500 | Unexpected failure.                          |
 
 
 **Example request** (multipart + `printRequestJson`)
@@ -299,28 +369,11 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
     "svgFileName": "signature.svg",
     "commandCount": 842,
     "result": {
-      "message": "Print complete.",
       "commands_sent": 840,
-      "copies": 0,
-      "total_commands_sent": 0,
-      "svg_total_distance_mm": 156.32,
+      "cumulative_distance_mm": 12606.57,
       "executed_distance_mm": 156.32,
       "execution_percent": 100.0,
-      "cumulative_distance_mm": 12606.57,
       "job_stopped": false
-    },
-    "status": {
-      "is_printing": false,
-      "bulk_requested_total": 0,
-      "bulk_printed_count": 0,
-      "bulk_stop_requested": false,
-      "current_svg_total_distance_mm": 156.32,
-      "current_executed_distance_mm": 156.32,
-      "current_execution_percent": 100.0,
-      "cumulative_distance_mm": 12606.57,
-      "max_pen_distance_m": 2.5,
-      "used_pen_distance_m": 12.607,
-      "remaining_pen_percent": 89.85
     },
     "queued": false,
     "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
@@ -355,9 +408,9 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
 ```json
 {
   "success": false,
-  "message": "Printer is not connected. Open the plotter from the Desktop App or CLI first.",
+  "message": "[PRINTER_STATE_ERROR] Printer is not connected. Open the plotter from the Desktop App or CLI first.",
   "data": null,
-  "errorCode": "PRINTER_STATE_ERROR",
+  "errorCode": 1024,
   "details": null
 }
 ```
@@ -381,15 +434,13 @@ Same `**multipart/form-data**` and print parameters as single print, plus:
 
 | Field          | Type      | Description                                            |
 | -------------- | --------- | ------------------------------------------------------ |
-| `copies`       | `integer` | Requested total copies (bulk).                         |
 | `bulkProgress` | `object`  | `requestedTotal`, `printedCount`, `stopRequested`.     |
-| `result`       | `object`  | `[PrintResponse](#printresponse-as-json)`.             |
-| `status`       | `object`  | Full `PrinterStatus` (same fields as status endpoint). |
+| `result`       | `object`  | Slim bulk summary: `cumulative_distance_mm`, `execution_percent`, `total_commands_sent`. |
 
 
 **Queued `data` (HTTP `202`):** Same shape as print queue response; `jobType` is `"bulk"`.
 
-**Extra `errorCode`:** `BULK_PRINT_FAILED` (`500`).
+**Extra `errorCode`:** `1019` (`PRINT_FAILED`) on HTTP `500`.
 
 **Example request**
 
@@ -409,36 +460,16 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
   "message": "Bulk print completed.",
   "data": {
     "svgFileName": "signature.svg",
-    "copies": 5,
     "commandCount": 842,
     "result": {
-      "message": "Bulk print complete.",
-      "commands_sent": 4200,
-      "copies": 5,
-      "total_commands_sent": 4200,
-      "svg_total_distance_mm": 781.6,
-      "executed_distance_mm": 781.6,
-      "execution_percent": 100.0,
       "cumulative_distance_mm": 13388.17,
-      "job_stopped": false
+      "execution_percent": 100.0,
+      "total_commands_sent": 4200
     },
     "bulkProgress": {
       "requestedTotal": 5,
       "printedCount": 5,
       "stopRequested": false
-    },
-    "status": {
-      "is_printing": false,
-      "bulk_requested_total": 5,
-      "bulk_printed_count": 5,
-      "bulk_stop_requested": false,
-      "current_svg_total_distance_mm": 156.32,
-      "current_executed_distance_mm": 156.32,
-      "current_execution_percent": 100.0,
-      "cumulative_distance_mm": 13388.17,
-      "max_pen_distance_m": 2.5,
-      "used_pen_distance_m": 13.388,
-      "remaining_pen_percent": 89.22
     },
     "queued": false,
     "jobId": "550e8400-e29b-41d4-a716-446655440000",
@@ -693,7 +724,80 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/change-pen" \
 
 ---
 
+#### `POST /api/config/pen-distance`
+
+**Primary** endpoint for cumulative distance reset and/or max pen distance. Replaces calling **`POST /api/config/reset`** and **`POST /api/config/pen-max-distance`** separately; those URLs remain as **legacy** aliases (same server logic underneath).
+
+**Request body** (JSON, or form fields with the same keys)
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `resetCumulative` | `boolean` | No | Default `false`. If `true`, zeros cumulative distance (same as legacy reset). **`409` `PRINTER_BUSY`** if the printer is busy. |
+| `meters` | `number` | No* | Sets max pen distance in meters (**must be &gt; 0** if provided). |
+| `maxPenDistanceM` | `number` | No* | Alias for **`meters`**. |
+
+\* At least one of **`resetCumulative: true`** or a max-distance field must be present; otherwise **`400`** `PEN_DISTANCE_NO_ACTION` (`1041`).
+
+**Processing order:** When both apply, cumulative reset runs **first**, then max distance (same as legacy reset with `maxPenDistanceM`).
+
+**Success `data`**
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `maxPenDistanceM` | `number` | Configured max (meters). |
+| `remainingPenPercent` | `number` | Remaining pen life estimate (percent). |
+| `cumulativeDistanceMm` | `number` | Present **only when** `resetCumulative` was `true`; value after reset (typically `0`). |
+
+**Example — reset only**
+
+```bash
+curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
+  -H "X-API-Key: QSCWDVEFBRGN" \
+  -H "Content-Type: application/json" \
+  -d "{\"resetCumulative\":true}"
+```
+
+**Example — set max only**
+
+```bash
+curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
+  -H "X-API-Key: QSCWDVEFBRGN" \
+  -H "Content-Type: application/json" \
+  -d "{\"meters\":2.75}"
+```
+
+**Example response** `200` (combined)
+
+```json
+{
+  "success": true,
+  "message": "Cumulative distance reset and max pen distance updated.",
+  "data": {
+    "maxPenDistanceM": 3.0,
+    "remainingPenPercent": 100.0,
+    "cumulativeDistanceMm": 0.0
+  },
+  "errorCode": null,
+  "details": null
+}
+```
+
+**Error `errorCode` (numeric)**
+
+
+| Code | Legacy | HTTP | Description |
+| ---: | ------ | --- | ----------- |
+| 1041 | `PEN_DISTANCE_NO_ACTION` | 400 | Neither reset nor max distance supplied. |
+| 1022 | `PRINTER_BUSY` | 409 | Reset requested while printer is busy. |
+| 1017 | `PEN_MAX_DISTANCE_INVALID` | 400 | Invalid max distance (e.g. ≤ 0 or bad number). |
+| 1025 | `RESET_FAILED` | 500 | Unexpected failure (combined or reset portion). |
+| 1016 | `PEN_MAX_DISTANCE_FAILED` | 500 | Unexpected failure on max-distance path alone. |
+
+---
+
 #### `POST /api/config/reset`
+
+**Legacy.** Prefer **`POST /api/config/pen-distance`** with `{"resetCumulative":true,...}`. Behavior unchanged: optional **`maxPenDistanceM`** still updates max after reset.
 
 **Example request**
 
@@ -723,6 +827,8 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/reset" \
 ---
 
 #### `POST /api/config/pen-max-distance`
+
+**Legacy.** Prefer **`POST /api/config/pen-distance`** with `{"meters":...}` (or `maxPenDistanceM`). Response shape unchanged: **`data.stats`** with full distance stats.
 
 **Example request**
 
@@ -754,6 +860,52 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-max-distance" \
   "details": null
 }
 ```
+
+---
+
+### Config — UI profile
+
+#### `GET /api/config/ui-profile`
+
+Returns the saved UI profile: **`print`** (paper, position, scale, rotation, invert flags), **`capture`** (scanner/camera corner quad and focus settings), and **`updatedAt`**.
+
+**Example response** `200` uses the usual envelope; **`data`** is the profile object (not wrapped again).
+
+---
+
+#### `POST /api/config/ui-profile`
+
+**Request body is the profile object itself** — a JSON object with top-level **`capture`** and **`print`** keys (same logical shape as **`data`** from `GET /api/config/ui-profile`).
+
+**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level **`data`** property). The server only reads **`capture`** and **`print`** from the **root** of the JSON body. If you post `{ "data": { "capture": { ... } } }`, **`capture` and `print` are ignored**, the server falls back to defaults (`capture.quad_points` becomes `[]`, `manual_focus_value` to `35`, default `print` settings), and **`success`** can still be **`true`**. You may also see **`scannerApplyWarning`** if scanner session apply fails afterward.
+
+Optional: on success, **`data`** may include **`scannerApplyWarning`** (string) when the profile file saved but pushing capture settings to the scanner service failed (for example upstream **HTTP 400**).
+
+**`updatedAt`** is written by the server on save; clients may omit it in the request.
+
+**Example request body** (root-level `capture` / `print` only)
+
+```json
+{
+  "capture": {
+    "autofocus_enabled": false,
+    "manual_focus_value": 25,
+    "quad_points": [[1727, 45], [1712, 1074], [282, 1057], [287, 50]]
+  },
+  "print": {
+    "width": "210mm",
+    "height": "297mm",
+    "xPosition": "0",
+    "yPosition": "0",
+    "scale": 1,
+    "rotation": 0,
+    "invertX": true,
+    "invertY": true
+  }
+}
+```
+
+**Error codes:** `UI_PROFILE_REQUIRED` (400), `UI_PROFILE_SAVE_FAILED` (500).
 
 ---
 
@@ -855,6 +1007,18 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/scanner/capture/oneshot" \
 
 #### `GET /api/config/print-history`
 
+Query parameters:
+
+
+| Name      | Type      | Default | Description |
+| --------- | --------- | ------- | ----------- |
+| `days`    | `integer` | `30`    | Only jobs with `queued_at` within this many days (min `1`). |
+| `limit`   | `integer` | `500`   | Max rows (clamped `1`–`2000`). |
+| `compact` | `boolean` | `false` | If `true` / `1` / `yes`, each `items[]` entry is trimmed: omits `started_at`, omits `error_message` when null, unwraps stored `result.payload` into a slim `result` (+ `bulkProgress` for bulk jobs). |
+
+
+**Default (`compact` off):** Each item includes all SQLite columns (`started_at`, `error_message`, etc.) and **`result`** as stored (for new jobs, `result.payload` holds the same slim print/bulk shapes as `POST /api/cmd/print` responses).
+
 **Example request**
 
 ```bash
@@ -862,7 +1026,12 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
   "http://127.0.0.1:5000/api/config/print-history?days=7&limit=50"
 ```
 
-**Example response** `200`
+**Example response** `200` with `compact=true`
+
+```bash
+curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
+  "http://127.0.0.1:5000/api/config/print-history?days=7&limit=50&compact=1"
+```
 
 ```json
 {
@@ -879,28 +1048,13 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
         "copies_requested": 1,
         "copies_printed": 1,
         "queued_at": "2026-04-28T13:00:00+00:00",
-        "started_at": "2026-04-28T13:00:01+00:00",
         "completed_at": "2026-04-28T13:02:30+00:00",
-        "error_message": null,
         "result": {
-          "payload": {
-            "svgFileName": "signature.svg",
-            "commandCount": 842,
-            "result": {
-              "message": "Print complete.",
-              "commands_sent": 840,
-              "copies": 0,
-              "total_commands_sent": 0,
-              "svg_total_distance_mm": 156.32,
-              "executed_distance_mm": 156.32,
-              "execution_percent": 100.0,
-              "cumulative_distance_mm": 12606.57,
-              "job_stopped": false
-            },
-            "status": {
-              "is_printing": false
-            }
-          }
+          "commands_sent": 840,
+          "cumulative_distance_mm": 12606.57,
+          "executed_distance_mm": 156.32,
+          "execution_percent": 100.0,
+          "job_stopped": false
         }
       }
     ],
@@ -911,6 +1065,8 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
   "details": null
 }
 ```
+
+Older rows may still use a nested `result.payload` shape when `compact` is off. Failed jobs include `error_message` when set.
 
 Request log listing/detail config APIs were removed. Use `GET /api/config/print-history` for persisted print/bulk job history.
 
@@ -1018,6 +1174,7 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | `POST` | `/api/config/change-pen/start`  |
 | `POST` | `/api/config/change-pen/finish` |
 | `POST` | `/api/config/change-pen`        |
+| `POST` | `/api/config/pen-distance`      |
 | `POST` | `/api/config/reset`             |
 | `POST` | `/api/config/pen-max-distance`  |
 

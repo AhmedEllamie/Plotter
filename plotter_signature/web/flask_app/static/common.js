@@ -32,6 +32,10 @@ function parseApiResponse(response) {
   }).then((payload) => {
     if (!response.ok || payload.success === false) {
       let message = payload?.message || `Request failed (${response.status})`;
+      const code = payload?.errorCode;
+      if (code !== null && code !== undefined && code !== "") {
+        message = `[#${code}] ${message}`;
+      }
       if (response.status === 401) {
         message = `${message} Configure a valid API key from the Configuration page.`;
       }

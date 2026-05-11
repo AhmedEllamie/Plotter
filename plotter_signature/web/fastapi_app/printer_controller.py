@@ -20,11 +20,23 @@ from plotter_signature.infrastructure.security.api_key_auth import validate_api_
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 
 
+from plotter_signature.web.last_api_error import get_last_api_error
+
+
 def _printer_status_public_dict(provider: ServiceProvider) -> dict[str, Any]:
     payload = asdict(provider.printer_service.get_status())
     payload.pop("port_name", None)
     payload.pop("is_open", None)
     payload["printer_connected"] = provider.printer_service.is_open
+    last = get_last_api_error()
+    if last is None:
+        payload["lastApiErrorCode"] = None
+        payload["lastApiErrorMessage"] = None
+        payload["lastApiErrorAt"] = None
+    else:
+        payload["lastApiErrorCode"] = last.error_code
+        payload["lastApiErrorMessage"] = last.message
+        payload["lastApiErrorAt"] = last.at
     return payload
 
 

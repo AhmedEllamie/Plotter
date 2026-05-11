@@ -32,9 +32,9 @@ Invalid or missing key → **HTTP 401** and JSON:
 ```json
 {
   "success": false,
-  "message": "Invalid X-API-Key header.",
+  "message": "[UNAUTHORIZED] Invalid X-API-Key header.",
   "data": null,
-  "errorCode": "UNAUTHORIZED",
+  "errorCode": 1037,
   "details": null
 }
 ```
@@ -48,7 +48,7 @@ Most endpoints return **JSON** with this shape:
 | `success`   | `true` / `false` |
 | `message`   | Human-readable summary |
 | `data`      | Payload object/array, or `null` on many errors |
-| `errorCode` | Machine code on failure; `null` on success |
+| `errorCode` | Integer machine code on failure (`null` on success); legacy string tokens are folded into `message` as `[TOKEN] ...`. See [API_REFERENCE.md](API_REFERENCE.md#api-error-code-registry). |
 | `details`   | Extra context (optional) |
 
 **Postman tip:** open the **Pretty** JSON view and check **status code** (200, 202, 400, 401, 409, 502, …) together with `success` and `errorCode`.
@@ -91,8 +91,8 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | ------ | ---- | ------------- | -------------------- | -------------------------- |
 | GET | `/api/cmd/health` | — | 200 | `printerConnected`, `printerBusy`, `captureResetConfigured` |
 | GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
-| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required); optional `printRequestJson` or JSON / form print settings | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, `result`, `status`, … See [API_REFERENCE](API_REFERENCE.md#post-apicmdprint). 202: `queued: true`, `jobId`, `queuePosition`, … |
-| POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `copies`, `bulkProgress` when completed |
+| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required); optional `printRequestJson` or JSON / form print settings | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, slim `result` (see [API_REFERENCE](API_REFERENCE.md#post-apicmdprint)). 202: `queued: true`, `jobId`, `queuePosition`, … |
+| POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `bulkProgress`; no top-level `copies` on 200; `result` is slim bulk summary |
 | POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — cooperative bulk cancel |
 | POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Idle: `data` is `{}` (use `message`). Busy: `{ "status": … }` |
 
@@ -113,7 +113,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | ------ | ---- | ------------- | --------------- | ------------------ |
 | GET | `/api/config` | — | 200 | Scanner/capture flags, `scannerServiceBaseUrl`, … |
 | GET | `/api/config/ui-profile` | — | 200 | `print`, `capture`, `updatedAt` — default shape includes paper/settings and `capture.quad_points` |
-| POST | `/api/config/ui-profile` | JSON object (same logical shape as GET; see [API_REFERENCE](API_REFERENCE.md) / app defaults: `print` + `capture` sections) | 200 | Full saved profile; `capture` settings are applied to scanner session config |
+| POST | `/api/config/ui-profile` | JSON **root** object with `print` + `capture` only — **not** the full GET envelope (do not nest under top-level `data`); see [API_REFERENCE](API_REFERENCE.md) “Config — UI profile” | 200 | Full saved profile; `capture` applied to scanner when configured; may include `scannerApplyWarning` |
 
 **POST errors:** `UI_PROFILE_REQUIRED` (400), `UI_PROFILE_SAVE_FAILED` (500).
 
@@ -140,8 +140,9 @@ python -m plotter_signature.cli disconnect
 | POST | `/api/config/change-pen/start` | `{}` | 200 — `data` is `{}` (use `message`) |
 | POST | `/api/config/change-pen/finish` | `{}` | 200 — same |
 | POST | `/api/config/change-pen` | JSON `{"mode":"start"}` or `{"mode":"finish"}` | 200 — delegates to start/finish (`data` `{}`) |
-| POST | `/api/config/reset` | Optional `{"maxPenDistanceM": 3.0}` | 200 — `data` with **`maxPenDistanceM` only** |
-| POST | `/api/config/pen-max-distance` | `{"meters": 2.75}` (or form key per server validation) | 200 — `data.stats` |
+| POST | `/api/config/pen-distance` | `{"resetCumulative":true}`, `{"meters":2.75}`, or both | 200 — slim `data`: `maxPenDistanceM`, `remainingPenPercent`, optional `cumulativeDistanceMm` after reset |
+| POST | `/api/config/reset` | Optional `{"maxPenDistanceM": 3.0}` (**legacy**; prefer `pen-distance`) | 200 — `data` with **`maxPenDistanceM` only** |
+| POST | `/api/config/pen-max-distance` | `{"meters": 2.75}` (**legacy**; prefer `pen-distance`) | 200 — `data.stats` |
 
 ---
 
@@ -172,7 +173,7 @@ python -m plotter_signature.cli disconnect
 | ------ | ---- | ------------- | --------------- |
 | GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1); plus header `X-API-Key` **or** query `token` (must match `PLOTTER_STREAM_TOKEN` if set, otherwise `PLOTTER_API_KEY`) | **200** MJPEG stream (binary) |
 
-Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section. Scanner-related `errorCode` examples: `SCANNER_CONFIG_REQUIRED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, `SCANNER_CAPTURE_FAILED`, stream: `SCANNER_STREAM_*`.
+Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section. Scanner-related legacy tokens (see numeric codes in [API_REFERENCE.md](API_REFERENCE.md#api-error-code-registry)): `SCANNER_CONFIG_REQUIRED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, `SCANNER_CAPTURE_FAILED`, stream: `SCANNER_STREAM_*`.
 
 ---
 
@@ -212,7 +213,7 @@ Same handler is registered for both paths (use whichever you prefer in Postman).
 
 | Method | Path | Query | Typical success |
 | ------ | ---- | ----- | --------------- |
-| GET | `/api/config/print-history` | `days` (default **30**), `limit` (default **500**) | 200 — `items[]`, `days`, `limit` |
+| GET | `/api/config/print-history` | `days` (default **30**), `limit` (default **500**), optional `compact=1` | 200 — `items[]`, `days`, `limit`; compact mode trims rows and unwraps slim `result` / `bulkProgress` |
 
 Invalid integers → `INVALID_QUERY` (400).
 
@@ -224,7 +225,7 @@ Invalid integers → `INVALID_QUERY` (400).
 2. **01 Health & config:** `GET health`, `GET config`, `GET ui-profile`.  
 3. **02 Status:** `GET status`.  
 4. **03 Print:** `POST print`, `POST print/bulk`, `POST bulk/stop`, `POST void`.  
-5. **04 Pen / stats:** change-pen, reset, pen-max-distance.  
+5. **04 Pen / stats:** change-pen, **`pen-distance`** (primary), legacy `reset` / `pen-max-distance` if needed.  
 6. **05 Capture upload & latest:** `POST capture`, `GET capture/latest`, `GET capture/latest/image`.  
 7. **06 Scanner:** `capture/start`, `capture/{id}/status`, `capture/{id}/result`, `capture/run`, `capture/run/{job_id}`, `stream.mjpg`.  
 8. **07 History:** `GET print-history`.
@@ -253,7 +254,7 @@ Some deployments expose a **FastAPI** controller (see [TECHNICAL_DOCUMENTATION.m
 - `GET /api/config`
 - `GET /api/config/ui-profile` — `POST /api/config/ui-profile`
 - `POST /api/config/change-pen/start` — `POST /api/config/change-pen/finish` — `POST /api/config/change-pen`
-- `POST /api/config/reset` — `POST /api/config/pen-max-distance`
+- `POST /api/config/pen-distance` — legacy: `POST /api/config/reset` — `POST /api/config/pen-max-distance`
 - `POST /api/config/capture` — `GET /api/config/capture/latest` — `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg`
 - `POST /api/config/scanner/capture/start`
