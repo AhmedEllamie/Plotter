@@ -12,7 +12,8 @@
   - message: success message
   - data: endpoint-specific payload
   - errorCode: null
-- Success data (idle): empty object `{}`; use **`message`** for the outcome. When busy (cancel path): `data.status` (printer status object).
+- Success data **idle:** `{}`; use **`message`** for the outcome.
+- Success data **while printing (`is_printing`):** `{ "voidQueued": true, "voidAfterPrintPending": true }` — void runs automatically after the job (no immediate cancel).
 
 ## Error Response
 - Error envelope:

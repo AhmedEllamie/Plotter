@@ -272,52 +272,6 @@ class _QueuedPrintJob:
     copies: int
 
 
-def _extract_capture_image_payload() -> tuple[str, str, bytes]:
-    for key in ("photo", "image", "file", "capture"):
-        upload = request.files.get(key)
-        if upload is None:
-            continue
-        payload = upload.read()
-        if payload:
-            return (
-                upload.filename or "capture.jpg",
-                upload.mimetype or "image/jpeg",
-                payload,
-            )
-
-    if request.files:
-        upload = next(iter(request.files.values()))
-        payload = upload.read()
-        if payload:
-            return (
-                upload.filename or "capture.jpg",
-                upload.mimetype or "image/jpeg",
-                payload,
-            )
-
-    json_payload = _get_json_dict()
-    image_base64 = json_payload.get("imageBase64") or request.form.get("imageBase64")
-    if isinstance(image_base64, str) and image_base64:
-        raw_data = image_base64.split(",", 1)[1] if "," in image_base64 else image_base64
-        try:
-            payload = base64.b64decode(raw_data)
-        except Exception as ex:
-            raise ValueError(f"Invalid imageBase64 payload: {ex}") from ex
-        if payload:
-            return (
-                str(json_payload.get("fileName") or request.form.get("fileName") or "capture.jpg"),
-                str(json_payload.get("contentType") or request.form.get("contentType") or "image/jpeg"),
-                payload,
-            )
-
-    raw_binary = request.get_data(cache=False)
-    content_type = request.content_type or ""
-    if raw_binary and content_type.startswith("image/"):
-        return ("capture.jpg", content_type, raw_binary)
-
-    raise ValueError("No capture image payload found.")
-
-
 def _build_scanner_headers(scanner_settings: ScannerServiceSettings, include_content_type: bool = False) -> dict[str, str]:
     headers: dict[str, str] = {}
     if include_content_type:
@@ -1281,13 +1235,14 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     status_code=409,
                 )
             if provider.printer_service.is_printing:
-                stop_requested = provider.printer_service.request_print_cancel()
-                if not stop_requested:
-                    return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
-                data = _apply_print_stop_side_effects()
+                provider.printer_service.queue_void_after_print()
+                st = provider.printer_service.get_status()
                 return api_success(
-                    message="Current print job stop requested. The printer will eject and return to idle.",
-                    data=data,
+                    message="Void queued; it will run automatically after the current print or bulk job completes.",
+                    data={
+                        "voidQueued": True,
+                        "voidAfterPrintPending": st.void_after_print_pending,
+                    },
                 )
             _run_async(provider.printer_service.void_print())
         except RuntimeError as ex:
@@ -1532,28 +1487,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     @app.post("/api/config/scanner/capture/oneshot")
     def scanner_capture_oneshot() -> tuple[Response, int]:
         return _scanner_capture_manual_impl(include_data_uri_default=True)
-
-    @app.post("/api/config/capture")
-    def capture_upload() -> tuple[Response, int]:
-        try:
-            file_name, content_type, payload = _extract_capture_image_payload()
-        except ValueError as ex:
-            return api_error(str(ex), error_code="CAPTURE_PAYLOAD_INVALID", status_code=400)
-        except Exception as ex:
-            return api_error(f"Capture upload failed: {ex}", error_code="CAPTURE_UPLOAD_FAILED", status_code=500)
-
-        model = runtime_state.set_captured_image(file_name, content_type, payload)
-        return api_success(
-            message="Captured image stored.",
-            data={
-                "fileName": model.file_name,
-                "contentType": model.content_type,
-                "sizeBytes": len(model.content),
-                "capturedAt": _to_iso8601_utc(model.captured_at),
-                "imageUrl": "/api/config/capture/latest/image",
-            },
-            status_code=201,
-        )
 
     @app.get("/api/config/capture/latest")
     def capture_latest() -> tuple[Response, int]:

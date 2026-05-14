@@ -78,7 +78,7 @@ All failing JSON responses that use the standard envelope expose a numeric top-l
 | 1003        | `CAPTURE_JOB_NOT_FOUND`               |
 | 1004        | `CAPTURE_JOB_TIMEOUT`                 |
 | 1005        | `CAPTURE_NOT_FOUND`                   |
-| 1006        | `CAPTURE_PAYLOAD_INVALID`             |
+| 1006        | `CAPTURE_PAYLOAD_INVALID` — reserved; formerly upload validation (`POST /api/config/capture` removed). |
 | 1007        | `CAPTURE_UPLOAD_FAILED`               |
 | 1008        | `EMPTY_SVG`                           |
 | 1009        | `INVALID_PEN_MODE`                    |
@@ -276,7 +276,8 @@ curl -sS -H "X-API-Key: QSCWDVEFBRGN" "http://127.0.0.1:5000/api/cmd/health"
 | `is_printing`                   | `boolean` | `true` only during **print** or **bulk** jobs.                                                                                                                                                                                                |
 | `bulk_requested_total`          | `integer` | Bulk job: total copies requested (last bulk job context).                                                                                                                                                                                     |
 | `bulk_printed_count`            | `integer` | Bulk job: fully completed copies plus **one** while a bulk copy is actively running (capped at `bulk_requested_total`). Single print / idle: use `0`.                                                                                         |
-| `bulk_stop_requested`           | `boolean` | Bulk graceful stop requested, or (while a bulk job is active) immediate cancel from void/emergency. May also reflect a recent `POST /api/cmd/bulk/stop` accepted by this process (use **one API worker** per machine so status matches stop). |
+| `bulk_stop_requested`           | `boolean` | Bulk graceful stop requested, or (while a bulk job is active) immediate cancel when the internal stop flag is set. May also reflect a recent `POST /api/cmd/bulk/stop` accepted by this process (use **one API worker** per machine so status matches stop). |
+| `void_after_print_pending`      | `boolean` | `true` after `POST /api/cmd/void` was accepted **while** a print or bulk job was running; the void cycle will run automatically when that job finishes. Coalesced to one pending void. |
 | `current_svg_total_distance_mm` | `number`  | Total path length (mm) for current SVG context.                                                                                                                                                                                               |
 | `current_executed_distance_mm`  | `number`  | Pen-down distance executed (mm) for current job.                                                                                                                                                                                              |
 | `current_execution_percent`     | `number`  | 0–100 progress for current execution.                                                                                                                                                                                                         |
@@ -310,6 +311,7 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
     "bulk_requested_total": 0,
     "bulk_printed_count": 0,
     "bulk_stop_requested": false,
+    "void_after_print_pending": false,
     "current_svg_total_distance_mm": 0.0,
     "current_executed_distance_mm": 0.0,
     "current_execution_percent": 0.0,
@@ -526,7 +528,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 | `status`     | `object`  | Slim snapshot (not full `GET /api/cmd/status`): `bulk_printed_count`, `bulk_requested_total`, `cumulative_distance_mm`, `current_svg_total_distance_mm`, `remaining_pen_percent`, `used_pen_distance_m` — same count semantics as status. |
 
 
-Side effects: requests **graceful** bulk stop (current copy runs to completion and ejects; further copies are not started). For **immediate** mid-copy cancel during bulk, use `[POST /api/cmd/void](#post-apicmdvoid)` while printing. Marks active history job `stopped`, clears uploaded SVG. Use **one HTTP worker process** per deployment if you rely on `GET /api/cmd/status` staying in sync with bulk stop across requests.
+Side effects: requests **graceful** bulk stop (current copy runs to completion and ejects; further copies are not started). **`POST /api/cmd/void` no longer cancels an active print**; it queues a void for after the job (see [void](#post-apicmdvoid)). Marks active history job `stopped`, clears uploaded SVG. Use **one HTTP worker process** per deployment if you rely on `GET /api/cmd/status` staying in sync with bulk stop across requests.
 
 **Example request**
 
@@ -568,9 +570,11 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
 | —        | —    | —    | —        | No body.    |
 
 
-**Idle printer — success `data`:** empty object `{}`. Use `**message`** for the outcome text; use `[GET /api/cmd/status](#get-apicmdstatus)` for live printer state.
+**Idle printer (not printing):** runs the full void/eject-safe sequence (handshake, paper ready, init, eject). Success **`data`:** `{}`. Use **`message`** for the outcome text.
 
-**Busy printer — success `data`:** `{ "status": <PrinterStatus> }` (same as bulk stop).
+**While a print or bulk job is active (`is_printing`):** does **not** cancel mid-job. Sets a **coalesced** pending void; success **`data`:** `{ "voidQueued": true, "voidAfterPrintPending": true }`. After the job completes (including its normal `finally` eject), the server runs **`void_print()`** once automatically. Poll `[GET /api/cmd/status](#get-apicmdstatus)` for `void_after_print_pending`.
+
+If a queued void fails internally, the error is logged; the print job outcome is unchanged. Call `POST /api/cmd/void` again when idle if you still need a void cycle.
 
 **Example request (idle)**
 
@@ -588,6 +592,21 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
   "success": true,
   "message": "Void print completed.",
   "data": {},
+  "errorCode": null,
+  "details": null
+}
+```
+
+**Example response** `200` (void accepted while printing — queued)
+
+```json
+{
+  "success": true,
+  "message": "Void queued; it will run automatically after the current print or bulk job completes.",
+  "data": {
+    "voidQueued": true,
+    "voidAfterPrintPending": true
+  },
   "errorCode": null,
   "details": null
 }
@@ -883,7 +902,15 @@ Scanner manual config is embedded in `POST /api/config/ui-profile` under the `ca
 
 ### Config — Capture
 
-Single-step scanner rectification; applies manual session settings, runs the scanner capture pipeline server-side, and stores the rectified PNG as the latest dashboard image. The server may still expose other capture-related URLs for the built-in web UI; this section documents only the oneshot call.
+Scanner rectification stores the latest dashboard image server-side. Use **`POST /api/config/scanner/capture/oneshot`** (below) or scanner orchestration routes. **`POST /api/config/capture` (multipart / base64 upload) was removed** — use the scanner pipeline or another integration that calls `set_captured_image` internally.
+
+#### `GET /api/config/capture/latest`
+
+Optional query: `includeDataUri` (`boolean`). Returns metadata for the in-memory latest capture (same shape as oneshot success `data` without requiring `captureId`).
+
+#### `GET /api/config/capture/latest/image`
+
+Returns the raw image bytes (`Content-Type` from stored capture). Requires `X-API-Key` like other `/api/*` routes.
 
 #### `POST /api/config/scanner/capture/oneshot`
 
@@ -1052,7 +1079,7 @@ Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat
 
 ### PrinterStatus (as JSON)
 
-Public API status omits serial `**port_name**`. The `**GET /api/cmd/status**` response adds `**printer_connected**` (same meaning as internal `is_open` on the server). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`.
+Public API status omits serial `**port_name**`. The `**GET /api/cmd/status**` response adds `**printer_connected**` (same meaning as internal `is_open` on the server). Remaining keys are **snake_case** and match `[GET /api/cmd/status](#get-apicmdstatus)`, including `void_after_print_pending`.
 
 ### RequestLog (as JSON)
 
@@ -1127,11 +1154,13 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | `GET`  | `/api/config/scanner/stream.mjpg` |
 
 
-**Capture** (single-shot scanner storage)
+**Capture** (scanner + latest image)
 
 
-| Method | Path                                  |
-| ------ | ------------------------------------- |
+| Method | Path                                   |
+| ------ | -------------------------------------- |
+| `GET`  | `/api/config/capture/latest`           |
+| `GET`  | `/api/config/capture/latest/image`     |
 | `POST` | `/api/config/scanner/capture/oneshot` |
 
 

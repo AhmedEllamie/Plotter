@@ -147,6 +147,7 @@ class PrinterStatus:
     max_pen_distance_m: float = 0.0
     used_pen_distance_m: float = 0.0
     remaining_pen_percent: float = 0.0
+    void_after_print_pending: bool = False
 
 
 @dataclass

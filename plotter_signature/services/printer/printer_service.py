@@ -56,6 +56,7 @@ class PrinterService(IPrinterService):
         self._bulk_requested_total = 0
         self._bulk_printed_count = 0
         self._bulk_mid_cycle_active = False
+        self._void_after_print_queued = False
         self._serial_lock = threading.RLock()
 
     _COMMAND_VALUE_PATTERN = re.compile(r"([A-Za-z])\s*(-?\d+(?:\.\d+)?)")
@@ -285,6 +286,8 @@ class PrinterService(IPrinterService):
         display_bulk_count = self._bulk_printed_count + (1 if self._bulk_mid_cycle_active else 0)
         if self._bulk_requested_total > 0:
             display_bulk_count = min(display_bulk_count, self._bulk_requested_total)
+        with self._print_lock:
+            void_pending = self._void_after_print_queued
         return PrinterStatus(
             is_open=self.is_open,
             port_name=self.port_name,
@@ -301,6 +304,7 @@ class PrinterService(IPrinterService):
             max_pen_distance_m=round(self._max_pen_distance_m, 6),
             used_pen_distance_m=round(used_pen_distance_m, 6),
             remaining_pen_percent=self._calculate_remaining_pen_percent(),
+            void_after_print_pending=void_pending,
         )
 
     async def print(self, gcode: list[str]) -> PrintResponse:
@@ -341,6 +345,7 @@ class PrinterService(IPrinterService):
             )
         finally:
             self._end_print_job()
+            await self._run_pending_void_if_queued()
 
     async def bulk_print(self, gcode: list[str], copies: int) -> PrintResponse:
         self._begin_bulk_print_job(copies)
@@ -391,6 +396,7 @@ class PrinterService(IPrinterService):
             )
         finally:
             self._end_print_job()
+            await self._run_pending_void_if_queued()
 
     async def void_print(self) -> PrintResponse:
         self._begin_busy("void")
@@ -402,6 +408,24 @@ class PrinterService(IPrinterService):
             )
         finally:
             self._end_busy()
+
+    def queue_void_after_print(self) -> None:
+        with self._print_lock:
+            if self._busy_kind == "print":
+                self._void_after_print_queued = True
+
+    async def _run_pending_void_if_queued(self) -> None:
+        run_void = False
+        with self._print_lock:
+            if self._void_after_print_queued:
+                self._void_after_print_queued = False
+                run_void = True
+        if not run_void:
+            return
+        try:
+            await self.void_print()
+        except Exception as ex:
+            logger.exception("Queued void after print failed: %s", ex)
 
     def request_print_cancel(self) -> bool:
         with self._print_lock:

@@ -105,7 +105,7 @@ Send multipart form: `svg`, `copies` (1–100), and `printRequestJson` (optional
 ## `POST /api/cmd/bulk/stop`
 
 ### Description
-Requests **graceful** stop for an active **bulk** print: the **current copy** finishes (full eject), then no further copies are started. Clears any stored uploaded SVG on the server so the next job must upload again. For **immediate** cancel mid-copy (including during bulk), use `POST /api/cmd/void` while the printer is busy.
+Requests **graceful** stop for an active **bulk** print: the **current copy** finishes (full eject), then no further copies are started. Clears any stored uploaded SVG on the server so the next job must upload again. **`POST /api/cmd/void` while printing does not cancel mid-copy**; it queues a void after the job completes.
 
 ### How to use
 Call from UI stop button while bulk operation is running.
@@ -125,22 +125,22 @@ Call from UI stop button while bulk operation is running.
 ## `POST /api/cmd/void`
 
 ### Description
-When the printer is **idle**, runs the void/eject-safe printer sequence without drawing. When the printer is **busy** (single print or bulk job), requests **immediate** in-job **cancel**: the firmware path stops between G-code lines, runs the normal eject in the print cycle `finally`, and the next job can start. This is **stronger** than `POST /api/cmd/bulk/stop`, which only stops **after** the current bulk copy. Does **not** start a second serial “void” cycle on top of an in-flight job.
+When the printer is **idle**, runs the void/eject-safe printer sequence without drawing. When a **print or bulk job** is active (`is_printing`), **queues** a single void: the current job runs to completion (including its normal eject), then the server runs **`void_print()`** once. Poll `GET /api/cmd/status` for `void_after_print_pending`. This avoids aborting during “paper ready” / before init (bad eject geometry). **`POST /api/cmd/bulk/stop`** remains the way to stop a bulk run gracefully between copies.
 
-**Note:** Pen-change operations also mark the printer busy; cancel is requested but those command paths may not honor the stop flag until supported.
+**Note:** Pen-change operations mark the printer busy but are not `is_printing`; void while pen-change still uses the idle void path or may conflict — prefer finishing pen change first.
 
 ### How to use
-Use after rejection or maintenance when idle; use as an emergency **stop** while printing (terminator) without losing the ability to print again.
+Use after rejection or maintenance when idle. While printing, void schedules an extra void cycle **after** the job instead of an immediate cancel.
 
 ### What it takes
 - No body required.
 - Requires header: `X-API-Key`.
 
 ### Response
-- Idle: **`data`** is an empty object `{}` — use **`message`** for the outcome text; use `GET /api/cmd/status` for state.
-- Busy: same shape as bulk stop — `data.status` with updated `PrinterStatus` (cancel requested; job finishes asynchronously on the worker).
+- Idle: **`data`** is `{}` — use **`message`** for the outcome text; use `GET /api/cmd/status` for state.
+- While printing: **`data`** is `{ "voidQueued": true, "voidAfterPrintPending": true }` — void runs automatically when the job ends.
 
 ### Error codes
+- `VOID_BUSY` (409) — void already running
 - `VOID_RUNTIME_ERROR` (409)
-- `PRINTER_NOT_BUSY` (409) — if busy flag was inconsistent (rare race).
 - `VOID_FAILED` (500)

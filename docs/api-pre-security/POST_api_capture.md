@@ -1,24 +1,7 @@
-# POST /api/capture
+# POST /api/capture (removed)
 
-## Pre-Security Behavior
-- Authentication: Not required (before API key enforcement was added).
+The live Flask route **`POST /api/config/capture`** (multipart / `imageBase64` / raw image upload) was **removed**.
 
-## What It Takes
-- Image input accepted as multipart file (photo/image/file/capture), imageBase64, or raw image binary body
+Use **`POST /api/config/scanner/capture/oneshot`** or other scanner capture routes to populate the latest image, then **`GET /api/config/capture/latest`** / **`GET /api/config/capture/latest/image`** to read it.
 
-## Response
-- Success envelope (JSON APIs):
-  - success: true
-  - message: success message
-  - data: endpoint-specific payload
-  - errorCode: null
-- 201 success data: fileName, contentType, sizeBytes, capturedAt, imageUrl
-
-## Error Response
-- Error envelope:
-  - success: false
-  - message: error message
-  - data: null
-  - errorCode: endpoint error code
-  - details: optional extra details
-- Errors: CAPTURE_PAYLOAD_INVALID (400), CAPTURE_UPLOAD_FAILED (500)
+See [API_REFERENCE.md](../API_REFERENCE.md) — Config — Capture.

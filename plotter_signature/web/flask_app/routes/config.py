@@ -69,12 +69,6 @@ def register_config_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) 
         methods=["POST"],
     )
     app.add_url_rule(
-        "/api/config/capture",
-        endpoint="config_capture",
-        view_func=handlers["capture_upload"],
-        methods=["POST"],
-    )
-    app.add_url_rule(
         "/api/config/capture/latest",
         endpoint="config_capture_latest",
         view_func=handlers["capture_latest"],

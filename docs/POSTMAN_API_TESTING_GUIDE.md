@@ -144,13 +144,9 @@ python -m plotter_signature.cli disconnect
 
 ---
 
-## 7. Config — upload capture (dashboard image)
+## 7. Config — capture upload (removed)
 
-| Method | Path | Body | Typical success |
-| ------ | ---- | ---- | --------------- |
-| POST | `/api/config/capture` | **`multipart` file** (`photo` / `image` / `file` / `capture`) and/or **JSON** `imageBase64`, or raw image body | **201** — `fileName`, `contentType`, `sizeBytes`, `capturedAt`, `imageUrl` |
-
-**Errors:** `CAPTURE_PAYLOAD_INVALID` (400), `CAPTURE_UPLOAD_FAILED` (500).
+`POST /api/config/capture` was **removed**. Store a rectified page image via **`POST /api/config/scanner/capture/oneshot`** (section 11) or other scanner capture routes; then use section 8 to read it back.
 
 ---
 
@@ -224,7 +220,7 @@ Invalid integers → `INVALID_QUERY` (400).
 3. **02 Status:** `GET status`.  
 4. **03 Print:** `POST print`, `POST print/bulk`, `POST bulk/stop`, `POST void`.  
 5. **04 Pen / stats:** change-pen, **`pen-distance`**.  
-6. **05 Capture upload & latest:** `POST capture`, `GET capture/latest`, `GET capture/latest/image`.  
+6. **05 Latest capture:** `GET capture/latest`, `GET capture/latest/image`.  
 7. **06 Scanner:** `capture/start`, `capture/{id}/status`, `capture/{id}/result`, `capture/run`, `capture/run/{job_id}`, `stream.mjpg`.  
 8. **07 History:** `GET print-history`.
 
@@ -253,7 +249,7 @@ Some deployments expose a **FastAPI** controller (see [TECHNICAL_DOCUMENTATION.m
 - `GET /api/config/ui-profile` — `POST /api/config/ui-profile`
 - `POST /api/config/change-pen/start` — `POST /api/config/change-pen/finish` — `POST /api/config/change-pen`
 - `POST /api/config/pen-distance`
-- `POST /api/config/capture` — `GET /api/config/capture/latest` — `GET /api/config/capture/latest/image`
+- `GET /api/config/capture/latest` — `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg`
 - `POST /api/config/scanner/capture/start`
 - `GET /api/config/scanner/capture/{capture_id}/status` — `GET /api/config/scanner/capture/{capture_id}/result`

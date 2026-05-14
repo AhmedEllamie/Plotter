@@ -220,13 +220,14 @@ For each print cycle:
 - `bulk_print(gcode, copies)` loops print cycles
 - `bulk_print` / status: `bulk_printed_count` in `GET /api/cmd/status` includes the **in-flight** bulk sheet (completed + 1 while a cycle runs, capped at requested total).
 - `copies` constrained to 1..100 in API/CLI layer
-- stop request via `stop_bulk_print()` sets a **graceful** flag: the **current copy** completes; the loop checks the flag **between** copies. Immediate cancel still uses `request_print_cancel()` (`_stop_requested`), e.g. void while printing.
+- stop request via `stop_bulk_print()` sets a **graceful** flag: the **current copy** completes; the loop checks the flag **between** copies. **`request_print_cancel()`** (`_stop_requested`) remains for internal/stop-by-exception paths; **`POST /api/cmd/void` while printing no longer sets it** — void is **queued** and runs after the job completes (see §7.4).
 - returns partial completion if stopped early
 
 ### 7.4 Void Print
 
-- Same handshake/init/eject pattern
-- No drawing commands executed
+- Same handshake/init/eject pattern when run **idle** (`void_print`).
+- When **`POST /api/cmd/void`** is called **while** `is_printing`, the handler **queues** one void (`queue_void_after_print`); after `print` / `bulk_print` finishes and `_end_print_job()` runs, `void_print()` is **awaited** automatically so the firmware always sees a full cycle (avoids eject without init).
+- No drawing commands in the void cycle
 - Used when approval rejects a request
 
 ### 7.5 Pen Change Commands
@@ -375,7 +376,6 @@ Core printer:
 - `POST /api/config/pen-distance` (cumulative reset and/or max meters)
 
 Capture and scanner:
-- `POST /api/config/capture`
 - `GET /api/config/capture/latest`
 - `GET /api/config/capture/latest/image`
 - `GET /api/config/scanner/stream.mjpg` (proxy stream)
