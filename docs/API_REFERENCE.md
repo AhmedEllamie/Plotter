@@ -570,7 +570,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
 | —        | —    | —    | —        | No body.    |
 
 
-**Idle printer (not printing):** runs the full void/eject-safe sequence (handshake, paper ready, init, eject). Success **`data`:** `{}`. Use **`message`** for the outcome text.
+**Idle printer (not printing):** runs the full void/eject-safe sequence (handshake, paper ready, init, eject). Success **`data`:** `{}`. Use **`message`** for the outcome text. While this void is running, **`POST /api/cmd/print`** / **bulk** use the same submission lock as print jobs: expect **202** with `queued: true` if another client submits a print during void; the queue is drained when void finishes.
 
 **While a print or bulk job is active (`is_printing`):** does **not** cancel mid-job. Sets a **coalesced** pending void; success **`data`:** `{ "voidQueued": true, "voidAfterPrintPending": true }`. After the job completes (including its normal `finally` eject), the server runs **`void_print()`** once automatically. Poll `[GET /api/cmd/status](#get-apicmdstatus)` for `void_after_print_pending`.
 

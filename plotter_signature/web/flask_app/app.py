@@ -1244,7 +1244,16 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                         "voidAfterPrintPending": st.void_after_print_pending,
                     },
                 )
-            _run_async(provider.printer_service.void_print())
+            # Hold the same lock as print submission so a print cannot start _execute_queued_job
+            # while void still owns the serial busy state (_busy_kind == "void").
+            print_execution_lock.acquire()
+            try:
+                try:
+                    _run_async(provider.printer_service.void_print())
+                finally:
+                    _drain_pending_print_queue()
+            finally:
+                print_execution_lock.release()
         except RuntimeError as ex:
             return api_error(str(ex), error_code="VOID_RUNTIME_ERROR", status_code=409)
         except Exception as ex:
