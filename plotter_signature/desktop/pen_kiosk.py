@@ -122,7 +122,6 @@ class PenKioskApp:
         self._inline_error_var = StringVar(value="")
         self._api_feedback_code_var = StringVar(value="")
         self._api_feedback_message_var = StringVar(value="")
-        self._error_code_label: Label | None = None
         self._api_feedback_message_label: Label | None = None
         self._info_server_label: Label | None = None
         self._info_plotter_label: Label | None = None
@@ -192,81 +191,61 @@ class PenKioskApp:
 
     def _build_status_card(self, parent: Frame) -> None:
         bg = "#1e293b"
-        info_panel = self._status_section(parent, "Info")
+        # Section titles and row labels omitted for small HDMI kiosks (values only).
+        info_panel = self._status_section(parent, "")
         self._prepare_status_grid(info_panel)
         r = 0
-        self._grid_cell_key(info_panel, bg, r, 0, "Printer IP")
-        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=340)
-        self._grid_cell_key(info_panel, bg, r, 2, "Server")
-        self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
+        self._grid_cell_value_var(info_panel, bg, r, 0, self._current_ip_var, wraplength=340)
+        self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
         r += 1
-        self._grid_cell_key(info_panel, bg, r, 0, "Plotter")
-        self._info_plotter_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
-        self._grid_cell_key(info_panel, bg, r, 2, "State")
-        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
+        self._info_plotter_label = self._grid_cell_value_plain(info_panel, bg, r, 0)
+        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
 
-        meters_panel = self._status_section(parent, "Meters & progress")
+        meters_panel = self._status_section(parent, "")
         self._prepare_status_grid(meters_panel)
         r = 0
-        self._grid_cell_key(meters_panel, bg, r, 0, "Cumulative distance (m)")
-        self._grid_cell_value_var(meters_panel, bg, r, 1, self._cumulative_distance_value)
-        self._grid_cell_key(meters_panel, bg, r, 2, "Executed distance (m)")
-        self._grid_cell_value_var(meters_panel, bg, r, 3, self._executed_distance_value)
+        self._grid_cell_value_var(meters_panel, bg, r, 0, self._cumulative_distance_value)
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._executed_distance_value)
         r += 1
-        self._grid_cell_key(meters_panel, bg, r, 0, "Execution progress")
-        self._grid_cell_value_var(meters_panel, bg, r, 1, self._execution_percent_value)
-        self._grid_cell_key(meters_panel, bg, r, 2, "Pen remaining")
-        self._grid_cell_value_var(meters_panel, bg, r, 3, self._pen_remaining_value)
+        self._grid_cell_value_var(meters_panel, bg, r, 0, self._execution_percent_value)
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._pen_remaining_value)
         r += 1
-        self._grid_cell_key(meters_panel, bg, r, 0, "Bulk progress")
-        self._grid_cell_value_var(meters_panel, bg, r, 1, self._bulk_progress_value)
-        self._grid_cell_key(meters_panel, bg, r, 2, "Bulk stop requested")
-        self._grid_cell_value_var(meters_panel, bg, r, 3, self._bulk_stop_value)
+        self._grid_cell_value_var(meters_panel, bg, r, 0, self._bulk_progress_value)
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._bulk_stop_value)
 
-        errors_panel = self._status_section(parent, "Errors")
-        self._prepare_status_grid(errors_panel)
-        self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
-        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
-        self._grid_cell_key(errors_panel, bg, 0, 2, "Error message")
+        errors_panel = self._status_section(parent, "")
+        errors_panel.grid_columnconfigure(0, weight=1)
         self._api_feedback_message_label = self._grid_cell_value_plain(
             errors_panel,
             bg,
             0,
-            3,
+            0,
             font=("Segoe UI", 12),
             initial_fg="#64748b",
-            wraplength=420,
+            wraplength=900,
+            columnspan=4,
         )
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
         block.pack(fill=X, pady=(0, 10))
-        Label(
-            block,
-            text=title,
-            bg="#111827",
-            fg="#94a3b8",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", pady=(0, 8))
+        if title.strip():
+            Label(
+                block,
+                text=title,
+                bg="#111827",
+                fg="#94a3b8",
+                font=("Segoe UI", 12, "bold"),
+            ).pack(anchor="w", pady=(0, 8))
         inner = Frame(block, bg="#1e293b", padx=18, pady=14)
         inner.pack(fill=BOTH, expand=True)
         return inner
 
     def _prepare_status_grid(self, inner: Frame) -> None:
-        inner.grid_columnconfigure(0, weight=0)
+        inner.grid_columnconfigure(0, weight=1)
         inner.grid_columnconfigure(1, weight=1)
-        inner.grid_columnconfigure(2, weight=0)
+        inner.grid_columnconfigure(2, weight=1)
         inner.grid_columnconfigure(3, weight=1)
-
-    def _grid_cell_key(self, inner: Frame, bg: str, row: int, col: int, text: str) -> None:
-        Label(
-            inner,
-            text=text,
-            bg=bg,
-            fg="#94a3b8",
-            font=("Segoe UI", 12, "bold"),
-            anchor="w",
-        ).grid(row=row, column=col, sticky=W, padx=(0, 8), pady=3)
 
     def _grid_cell_value_var(
         self,
@@ -302,13 +281,14 @@ class PenKioskApp:
         font: object = ("Segoe UI", 12, "bold"),
         initial_fg: str = "#f8fafc",
         wraplength: int = 0,
+        columnspan: int = 1,
     ) -> Label:
         kw: dict = {"text": "—", "bg": bg, "fg": initial_fg, "font": font, "anchor": "w"}
         if wraplength > 0:
             kw["wraplength"] = wraplength
             kw["justify"] = "left"
         label = Label(inner, **kw)
-        label.grid(row=row, column=col, sticky=W + E, padx=(0, 16), pady=3)
+        label.grid(row=row, column=col, columnspan=columnspan, sticky=W + E, padx=(0, 8), pady=3)
         return label
 
     def _build_change_pen_card(self, parent: Frame) -> None:
@@ -454,8 +434,6 @@ class PenKioskApp:
     def _clear_error_panel(self) -> None:
         self._api_feedback_code_var.set("")
         self._api_feedback_message_var.set("")
-        if self._error_code_label is not None:
-            self._error_code_label.configure(text="—", fg="#64748b")
         if self._api_feedback_message_label is not None:
             self._api_feedback_message_label.configure(text="—", fg="#64748b")
 
@@ -651,19 +629,22 @@ class PenKioskApp:
         self._api_feedback_code_var.set(code_plain)
         self._api_feedback_message_var.set(trimmed)
 
-        if self._error_code_label is not None:
-            code_display = code_plain if code_plain else "—"
-            self._error_code_label.configure(
-                text=code_display,
-                fg="#fecaca" if is_error and code_plain else "#64748b",
-            )
-
         if self._api_feedback_message_label is not None:
-            msg_display = trimmed if trimmed else "—"
-            if is_error:
-                self._api_feedback_message_label.configure(text=msg_display, fg="#fecaca")
+            if not trimmed and not code_plain:
+                display = "—"
+            elif code_plain and trimmed:
+                display = f"[{code_plain}] {trimmed}"
+            elif code_plain:
+                display = f"[{code_plain}]"
             else:
-                self._api_feedback_message_label.configure(text=msg_display, fg="#86efac" if trimmed else "#64748b")
+                display = trimmed
+            if is_error:
+                self._api_feedback_message_label.configure(text=display, fg="#fecaca")
+            else:
+                self._api_feedback_message_label.configure(
+                    text=display,
+                    fg="#86efac" if trimmed else "#64748b",
+                )
 
     def _set_max_pen_distance(self) -> None:
         raw_value = self._max_pen_distance_var.get().strip()
