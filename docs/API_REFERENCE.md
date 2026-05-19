@@ -341,6 +341,8 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 | Body (JSON) | (entire body)      | `object`                         | No             | —       | Used only if JSON present: top-level keys or nested `printRequest` (see `_extract_print_payload`).      |
 
 
+**Print settings fallback:** Any omitted `[PrintRequest](#printrequest-fields)` values are taken from the persisted server ui-profile (`GET /api/config/ui-profile` → `print` object). Fields sent in the request override the profile.
+
 **Preconditions:** Printer connected; otherwise `409` `PRINTER_STATE_ERROR`.
 
 **Success `data` (immediate completion, HTTP `200`)**
@@ -1045,7 +1047,7 @@ Request log listing/detail config APIs were removed. Use `GET /api/config/print-
 
 ### PrintRequest fields
 
-Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat form keys.
+Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat form keys. Omitted keys fall back to ui-profile `print` (see `POST /api/cmd/print`).
 
 
 | Field        | JSON keys                | Type      | Default   | Validation                                                     |

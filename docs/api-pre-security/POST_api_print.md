@@ -5,6 +5,7 @@
 
 ## What It Takes
 - Multipart **SVG** on each request: form file field **`svg`** or **`file`**. Print settings via JSON body, printRequest object, printRequestJson form, or form fields.
+- **Omitted print fields** fall back to the server **ui-profile** `print` block (`GET/POST /api/config/ui-profile`). Request values always override profile values.
 
 ## Response
 - Success envelope (JSON APIs):

@@ -192,6 +192,51 @@ def _capture_profile_to_scanner_session_payload(capture: dict[str, Any]) -> tupl
     return payload, False
 
 
+_PRINT_REQUEST_FIELD_KEYS = frozenset(
+    {
+        "paper",
+        "Paper",
+        "width",
+        "Width",
+        "height",
+        "Height",
+        "xPosition",
+        "XPosition",
+        "yPosition",
+        "YPosition",
+        "scale",
+        "Scale",
+        "rotation",
+        "Rotation",
+        "invertX",
+        "InvertX",
+        "invertY",
+        "InvertY",
+    }
+)
+
+
+def _is_meaningful_print_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _filter_print_request_fields(data: dict[str, Any] | None) -> dict[str, Any]:
+    if not data:
+        return {}
+    return {key: value for key, value in data.items() if key in _PRINT_REQUEST_FIELD_KEYS}
+
+
+def _merge_print_request_payload(profile: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    """Request fields override server ui-profile `print` settings; profile fills omitted keys."""
+    base = {key: value for key, value in profile.items() if _is_meaningful_print_value(value)}
+    overlay = {key: value for key, value in request.items() if _is_meaningful_print_value(value)}
+    return {**base, **overlay}
+
+
 def _build_print_request(payload: dict[str, Any] | None) -> PrintRequest:
     data = payload or {}
     print_request = PrintRequest.from_dict(data)
@@ -211,8 +256,8 @@ def _extract_print_payload() -> dict[str, Any]:
     if json_payload:
         nested = json_payload.get("printRequest")
         if isinstance(nested, dict):
-            return nested
-        return json_payload
+            return _filter_print_request_fields(nested)
+        return _filter_print_request_fields(json_payload)
 
     raw_json = request.form.get("printRequestJson")
     if raw_json:
@@ -224,11 +269,11 @@ def _extract_print_payload() -> dict[str, Any]:
             raise ValueError("printRequestJson must be a JSON object.")
         nested = parsed.get("printRequest")
         if isinstance(nested, dict):
-            return nested
-        return parsed
+            return _filter_print_request_fields(nested)
+        return _filter_print_request_fields(parsed)
 
     if request.form:
-        return request.form.to_dict(flat=True)
+        return _filter_print_request_fields(request.form.to_dict(flat=True))
 
     return {}
 
@@ -461,6 +506,13 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     ui_profile_exists = ui_profile_path.exists()
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
     _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
+
+    def _resolve_print_request_payload() -> dict[str, Any]:
+        with ui_profile_lock:
+            profile_block = ui_profile_data.get("print")
+        profile = dict(profile_block) if isinstance(profile_block, dict) else {}
+        request_fields = _filter_print_request_fields(_extract_print_payload())
+        return _merge_print_request_payload(profile, request_fields)
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -1197,7 +1249,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not svg_payload:
             return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
 
-        print_request_dict = _extract_print_payload()
+        print_request_dict = _resolve_print_request_payload()
         return _submit_print_job("print", svg_payload, svg_file_name, print_request_dict, copies=1)
 
     @app.post("/api/cmd/print/bulk")
@@ -1224,7 +1276,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except ValueError as ex:
             return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
 
-        print_request_dict = _extract_print_payload()
+        print_request_dict = _resolve_print_request_payload()
         return _submit_print_job("bulk", svg_payload, svg_file_name, print_request_dict, copies=copies)
 
     @app.post("/api/cmd/bulk/stop")

@@ -5,6 +5,7 @@
 
 ## What It Takes
 - Same as `/api/print` (multipart **svg** or **file**) plus **copies** (JSON/form/query integer 1..100)
+- Omitted print fields use server **ui-profile** `print` settings; request overrides profile (see `POST /api/print`).
 
 ## Response
 - Success envelope (JSON APIs):
