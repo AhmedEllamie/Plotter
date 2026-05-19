@@ -77,11 +77,15 @@ def _ensure_not_busy(provider: ServiceProvider) -> None:
 def _printer_status_public_dict(
     provider: ServiceProvider,
     runtime_state: RuntimeState | None = None,
+    *,
+    void_queue_depth: int = 0,
 ) -> dict[str, Any]:
     payload = asdict(provider.printer_service.get_status())
     payload.pop("port_name", None)
     payload.pop("is_open", None)
     payload["printer_connected"] = provider.printer_service.is_open
+    payload["void_queue_depth"] = max(0, int(void_queue_depth))
+    payload["void_after_print_pending"] = bool(payload.get("void_after_print_pending")) or payload["void_queue_depth"] > 0
     last = get_last_api_error()
     if last is None:
         payload["lastApiErrorCode"] = None
@@ -476,6 +480,8 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 pass
 
     pending_print_queue: queue.Queue[_QueuedPrintJob] = queue.Queue()
+    pending_void_queue: queue.Queue[object] = queue.Queue()
+    _VOID_QUEUE_TICKET = object()
     print_execution_lock = threading.Lock()
     active_history_job_holder: dict[str, UUID | None] = {"id": None}
 
@@ -538,6 +544,17 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         finally:
             active_history_job_holder["id"] = None
 
+    def _drain_pending_void_queue() -> None:
+        while True:
+            try:
+                pending_void_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                _run_async(provider.printer_service.void_print())
+            except (RuntimeError, Exception):
+                pass
+
     def _drain_pending_print_queue() -> None:
         while True:
             try:
@@ -548,6 +565,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 _execute_queued_job(next_job)
             except (ValueError, RuntimeError, Exception):
                 pass
+        _drain_pending_void_queue()
 
     def _submit_print_job(
         kind: str,
@@ -1151,7 +1169,14 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     @app.get("/api/cmd/status")
     def status() -> tuple[Response, int]:
-        return api_success(message="Printer status loaded.", data=_printer_status_public_dict(provider, runtime_state))
+        return api_success(
+            message="Printer status loaded.",
+            data=_printer_status_public_dict(
+                provider,
+                runtime_state,
+                void_queue_depth=pending_void_queue.qsize(),
+            ),
+        )
 
     @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:
@@ -1228,28 +1253,22 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def void_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
-            if provider.printer_service.is_voiding:
-                return api_error(
-                    "Void operation already running.",
-                    error_code="VOID_BUSY",
-                    status_code=409,
-                )
-            if provider.printer_service.is_printing:
-                provider.printer_service.queue_void_after_print()
-                st = provider.printer_service.get_status()
+            if not print_execution_lock.acquire(blocking=False):
+                pending_void_queue.put(_VOID_QUEUE_TICKET)
+                depth = pending_void_queue.qsize()
                 return api_success(
-                    message="Void queued; it will run automatically after the current print or bulk job completes.",
+                    message="Void queued; will run when the printer is available.",
                     data={
                         "voidQueued": True,
-                        "voidAfterPrintPending": st.void_after_print_pending,
+                        "voidQueueDepth": depth,
+                        "voidAfterPrintPending": True,
                     },
+                    status_code=202,
                 )
-            # Hold the same lock as print submission so a print cannot start _execute_queued_job
-            # while void still owns the serial busy state (_busy_kind == "void").
-            print_execution_lock.acquire()
             try:
                 try:
                     _run_async(provider.printer_service.void_print())
+                    _drain_pending_void_queue()
                 finally:
                     _drain_pending_print_queue()
             finally:
@@ -1259,7 +1278,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except Exception as ex:
             return api_error(f"Void print failed: {ex}", error_code="VOID_FAILED", status_code=500)
 
-        return api_success("Void print completed.", data={})
+        remaining = pending_void_queue.qsize()
+        return api_success(
+            message="Void print completed." if remaining == 0 else "Void print completed; more void jobs are queued.",
+            data={"voidQueued": remaining > 0, "voidQueueDepth": remaining},
+        )
 
     @app.post("/api/config/change-pen/start")
     def change_pen_start() -> tuple[Response, int]:

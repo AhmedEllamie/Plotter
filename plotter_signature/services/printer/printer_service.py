@@ -345,7 +345,6 @@ class PrinterService(IPrinterService):
             )
         finally:
             self._end_print_job()
-            await self._run_pending_void_if_queued()
 
     async def bulk_print(self, gcode: list[str], copies: int) -> PrintResponse:
         self._begin_bulk_print_job(copies)
@@ -396,7 +395,6 @@ class PrinterService(IPrinterService):
             )
         finally:
             self._end_print_job()
-            await self._run_pending_void_if_queued()
 
     async def void_print(self) -> PrintResponse:
         self._begin_busy("void")

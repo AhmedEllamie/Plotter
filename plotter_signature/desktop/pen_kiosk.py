@@ -225,18 +225,20 @@ class PenKioskApp:
         self._grid_cell_value_var(meters_panel, bg, r, 3, self._bulk_stop_value)
 
         errors_panel = self._status_section(parent, "")
-        self._prepare_status_grid(errors_panel)
+        errors_panel.grid_columnconfigure(0, weight=0)
+        errors_panel.grid_columnconfigure(1, weight=1)
         self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
-        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
-        self._grid_cell_key(errors_panel, bg, 0, 2, "Error message")
+        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1, columnspan=3)
+        self._grid_cell_key(errors_panel, bg, 1, 0, "Error message")
         self._api_feedback_message_label = self._grid_cell_value_plain(
             errors_panel,
             bg,
-            0,
-            3,
+            1,
+            1,
             font=("Segoe UI", 12),
             initial_fg="#64748b",
-            wraplength=420,
+            wraplength=900,
+            columnspan=3,
         )
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
