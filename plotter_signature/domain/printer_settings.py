@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class PrinterSettings:
-    com_port: str = "COM5"
+    com_port: str = ""
     baud_rate: int = 250000
     verify_serial_identity: bool = True
     serial_identity_contains: list[str] = field(

@@ -1,159 +1,221 @@
-# Ubuntu Release Guide (Flask UI + API)
+# Ubuntu Release Guide (Flask UI + API + Kiosk)
 
-This guide prepares the `plotter_signature` package for production-style deployment on Ubuntu using `systemd`.
+Production deployment on Ubuntu with **systemd**, for standalone **`/opt/plotter-signature`** or meta-repo **`/opt/Automated_Signature/plotter-signature`**.
+
+Bundled templates default to the **meta-repo** paths. Adjust with `deploy/ubuntu/configure-units.sh` or edit units before `systemctl enable`.
+
+| Component | Port | systemd unit |
+|-----------|------|----------------|
+| Plotter Flask | 5001 | `plotter-signature-flask` |
+| Pen kiosk (GUI) | — | `plotter-pen-kiosk` (user) |
+| A4 scanner (sibling repo) | 8008 | `a4-scanner` — see `a4-flating/UBUNTU_RELEASE_GUIDE.md` |
 
 ## 1) Install OS packages
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+sudo apt install -y python3 python3-venv python3-pip python3-tk git
 ```
 
-If you use USB serial printer access:
+- **`python3-tk`** — required for the pen kiosk (Tkinter).
+- USB serial (plotter): `sudo usermod -aG dialout $USER` then log out/in.
 
-```bash
-sudo usermod -aG dialout $USER
-newgrp dialout
-```
+## 2) Clone, ownership, and Python environment
 
-## 2) Clone project and install Python dependencies
+**Do not use `sudo` for `python3 -m venv` or `pip install`** (avoids root-owned `.venv` and permission errors).
 
 ```bash
 sudo mkdir -p /opt
 cd /opt
-# Standalone plotter repo:
-sudo git clone https://github.com/AhmedEllamie/Plotter.git plotter-signature
-# Or: full stack (plotter + scanner submodules) — then use .../Automated_Signature/plotter-signature
-# git clone --recurse-submodules https://github.com/AhmedEllamie/Automated_Signature.git
-sudo chown -R $USER:$USER /opt/plotter-signature
-cd /opt/plotter-signature
 
+# Option A — meta repo (plotter + scanner):
+sudo git clone --recurse-submodules https://github.com/AhmedEllamie/Automated_Signature.git
+sudo chown -R $USER:$USER /opt/Automated_Signature
+cd /opt/Automated_Signature/plotter-signature
+
+# Option B — standalone plotter only:
+# sudo git clone https://github.com/AhmedEllamie/Plotter.git plotter-signature
+# sudo chown -R $USER:$USER /opt/plotter-signature
+# cd /opt/plotter-signature
+
+export PLOTTER_INSTALL_ROOT="$(pwd)"
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-# Critical: bind the venv to this checkout so `python -m plotter_signature` runs THIS tree (not an old wheel in site-packages).
 pip install -e .
 ```
 
-## 3) Create runtime environment file
+### Linux serial port (`appsettings.json`)
+
+Default **`Printer.ComPort`** is empty so startup **AutoConnect** scans `/dev/ttyUSB*` and `/dev/ttyACM*`.
+
+On Windows dev machines, set `"ComPort": "COM5"` (or your port) in `appsettings.json`.
+
+After the plotter USB adapter appears:
+
+```bash
+ls -l /dev/ttyUSB* /dev/ttyACM*
+python -m plotter_signature scan-serial --device-match "CH340"
+```
+
+Optionally set `"ComPort": "/dev/ttyUSB0"` in `appsettings.json`, then restart Flask.
+
+## 3) Runtime environment file
+
+Run from the **plotter-signature** repo root (paths below assume meta-repo layout):
 
 ```bash
 sudo mkdir -p /etc/plotter-signature
 sudo cp deploy/ubuntu/plotter-signature.env.example /etc/plotter-signature/plotter-signature.env
 sudo nano /etc/plotter-signature/plotter-signature.env
+sudo chmod 644 /etc/plotter-signature/plotter-signature.env
 ```
 
-At minimum set:
+Set at minimum:
 
-- `PLOTTER_API_KEY` to a long random shared secret. **This variable is mandatory** — the Flask service refuses to start (`RuntimeError`) if it is unset or blank, and every `/api/*` request must send the matching value as `X-API-Key`. Changing the key after deployment: edit the env file, `sudo systemctl restart plotter-signature-flask`, then update browsers/kiosk/integration clients.
-- `CAPTURE_RESET_URL` to your reset endpoint.
-- Optional `PLOTTER_SERIAL_DEVICE_MATCH` to a stable USB serial identifier for the plotter, such as `CH340`, `CP210x`, or `VID:PID=1A86:7523`.
+- **`PLOTTER_API_KEY`** — mandatory; every `/api/*` request needs header **`X-API-Key`**.
+- **`CAPTURE_RESET_URL`** — if capture flow is used.
+- **`SCANNER_SERVICE_BASE_URL=http://127.0.0.1:8008`** and **`SCANNER_SERVICE_TOKEN`** — must match `/etc/default/a4-scanner` when using the scanner service.
 
-Serial scan/check/connect/disconnect config APIs are removed. Use the Desktop App local USB panel or CLI direct serial flow instead. The CLI scans Ubuntu `/dev/ttyUSB*` and `/dev/ttyACM*` devices, matches `PLOTTER_SERIAL_DEVICE_MATCH` / `--device-match` against USB metadata (`device`, `name`, `description`, `manufacturer`, `hwid`), and opens the matching plotter directly.
+Optional: **`PLOTTER_SERIAL_DEVICE_MATCH=CH340`** (CLI / device metadata). **`AUTO_CONNECT_ON_STARTUP=0`** disables serial probe at Flask start.
+
+## 4) Install systemd units (paths)
 
 ```bash
-python -m plotter_signature.cli scan-serial --device-match "CH340"
-python -m plotter_signature.cli connect --device-match "CH340"
-python -m plotter_signature.cli disconnect
+cd /opt/Automated_Signature/plotter-signature   # or your install root
+export PLOTTER_INSTALL_ROOT="$(pwd)"
+./deploy/ubuntu/configure-units.sh --plotter-only
+
+sudo cp deploy/ubuntu/plotter-signature-flask.service /etc/systemd/system/
+sudo nano /etc/systemd/system/plotter-signature-flask.service   # verify User, paths
 ```
 
-The Desktop App uses the same direct serial resolver for its local USB connect/disconnect controls.
+Important:
 
-Unless you are on a machine **without** USB serial hardware (or CI), rely on the default: **AutoConnect runs once** when Flask/FastAPI start (same as `POST /api/config/auto-connect` with `{}`; failures are logged and the service still listens). To **disable** that probing, set **`AUTO_CONNECT_ON_STARTUP`** to `0`, `false`, `no`, or `off`.
-
-If scanner integration is used, also set:
-
-- `SCANNER_SERVICE_BASE_URL`
-- `SCANNER_SERVICE_BEARER_TOKEN` (if required)
-
-## 4) Install systemd service
-
-```bash
-sudo cp deploy/ubuntu/plotter-signature-flask.service /etc/systemd/system/plotter-signature-flask.service
-```
-
-Edit service user/group/path if needed:
-
-```bash
-sudo nano /etc/systemd/system/plotter-signature-flask.service
-```
-
-Important fields:
-
-- `User` should be your deployment user (the example unit uses `root`; many sites override to a dedicated account).
-- When not `root`, ensure **serial access**: user in **`dialout`** and the unit sets **`SupplementaryGroups=dialout`** (already present in the bundled service files).
-- `WorkingDirectory` should be your repo path.
-- `ExecStart` should point to that repo `.venv` Python.
-
-## 5) Start and enable service
+- **`WorkingDirectory`** and **`ExecStart`** must point at your repo **`.venv`** (same directory).
+- **`User=root`** + **`SupplementaryGroups=dialout`** in the Flask unit is fine; if **`User=diwan`**, add `dialout` to that user.
+- **`--host 0.0.0.0 --port 5001`** — required for LAN access.
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable plotter-signature-flask
-sudo systemctl start plotter-signature-flask
+sudo systemctl enable --now plotter-signature-flask
 sudo systemctl status plotter-signature-flask
 ```
 
-## 6) Verify application
+Confirm listen:
 
-Local health check:
+```bash
+sudo ss -tlnp | grep 5001    # expect 0.0.0.0:5001
+```
+
+## 5) Firewall (LAN access from laptop / other PCs)
+
+If **`ufw`** is active, allow services (recommended vs disabling firewall):
+
+```bash
+cd /opt/Automated_Signature/plotter-signature
+chmod +x deploy/ubuntu/ufw-services.sh
+./deploy/ubuntu/ufw-services.sh
+```
+
+Or manually:
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 5001/tcp
+sudo ufw allow 8008/tcp
+sudo ufw enable
+```
+
+From another machine: `http://<ubuntu-ip>:5001/` and `curl -H "X-API-Key: <key>" http://<ubuntu-ip>:5001/api/cmd/health`.
+
+## 6) Verify application
 
 ```bash
 curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/cmd/health
+curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/cmd/status
 ```
 
-UI:
+`printer_connected: true` requires plotter USB serial visible (`lsusb`, `/dev/ttyUSB*`) **before** Flask start; then `sudo systemctl restart plotter-signature-flask`.
 
-- `http://<SERVER_IP>:5001/`
-- `http://<SERVER_IP>:5001/configuration`
+## 7) Desktop auto-login (kiosk HDMI)
 
-## 7) Logs and troubleshooting
+So the pen kiosk starts without a login password (SSH can still require a password):
 
-Follow logs:
+```bash
+sudo nano /etc/gdm3/custom.conf
+```
+
+```ini
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=diwan
+```
+
+Or **Settings → Users → Automatic Login**. Reboot and confirm the desktop loads.
+
+## 8) Pen kiosk (user systemd + autostart)
+
+The kiosk is a **GUI** on the Ubuntu monitor — not over SSH with X11 forwarding.
+
+```bash
+cd /opt/Automated_Signature/plotter-signature
+export PLOTTER_INSTALL_ROOT="$(pwd)"
+chmod +x deploy/ubuntu/configure-units.sh
+./deploy/ubuntu/configure-units.sh --user-kiosk-only
+
+mkdir -p ~/.config/systemd/user ~/.config/autostart
+cp deploy/ubuntu/plotter-pen-kiosk.service ~/.config/systemd/user/
+cp deploy/ubuntu/plotter-pen-kiosk.desktop ~/.config/autostart/
+```
+
+Edit the user unit if needed — **do not** add `SupplementaryGroups=dialout` (causes exit **216/GROUP**). Serial is opened by **Flask**, not the kiosk.
+
+On the **local desktop** (or SSH with `XDG_RUNTIME_DIR` + `DBUS_SESSION_BUS_ADDRESS`):
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now plotter-pen-kiosk.service
+systemctl --user status plotter-pen-kiosk.service
+```
+
+Optional: `sudo loginctl enable-linger $USER`
+
+Test Tk once: `python -m plotter_signature.desktop.pen_kiosk` from a terminal on the HDMI session.
+
+## 9) Logs and troubleshooting
 
 ```bash
 sudo journalctl -u plotter-signature-flask -f
+journalctl --user -u plotter-pen-kiosk.service -f
 ```
 
-Common checks:
+| Symptom | Fix |
+|---------|-----|
+| **203/EXEC** or **200/CHDIR** | Wrong `ExecStart` / `WorkingDirectory`; run `configure-units.sh` |
+| **`externally-managed-environment`** | Never `sudo pip`; use venv as normal user |
+| **`No serial ports to try`** | Plotter USB not plugged / not in `lsusb`; fix hardware, restart Flask |
+| **`could not open port COM5`** | Set `"ComPort": ""` or `/dev/ttyUSB0` in `appsettings.json` |
+| Kiosk **Server unreachable** | Flask down or wrong IP; check `ss` and `ufw` |
+| Kiosk **Plotter Disconnected** | `printer_connected: false` — serial not open (see Flask logs / AutoConnect) |
+| **`216/GROUP`** on kiosk | Remove `SupplementaryGroups` from **user** kiosk unit |
+| LAN cannot reach :5001 | `ufw allow 5001/tcp`; confirm `0.0.0.0:5001` |
 
-- Service does not start:
-  - verify `WorkingDirectory` and `ExecStart` paths.
-  - verify `.venv` exists and dependencies installed.
-- Capture endpoints fail:
-  - verify `CAPTURE_RESET_URL` and connectivity.
-- Scanner endpoints fail:
-  - verify scanner base URL/token in env file.
-- **`git pull` shows new commits but APIs still behave like the old build** (for example `/api/*` returns **200** without `X-API-Key` when the new code should return **401**):
-  - systemd runs `python -m plotter_signature`, which loads **`plotter_signature` from the virtualenv**. If you only ever ran `pip install .` once, the **installed copy** can stay old while `git log` on disk is new.
-  - **Fix:** `source .venv/bin/activate` then `pip install -e .` (or `pip install --upgrade .`) from the repo root, then `sudo systemctl restart plotter-signature-flask`.
-  - **Confirm which code is running:**
-
-    ```bash
-    /opt/Automated_Signature/plotter-signature/.venv/bin/python -c \
-      "import plotter_signature; print(plotter_signature.__file__)"
-    ```
-
-    You want a path **inside your clone** (editable install), not only `.../site-packages/plotter_signature/...` from an old snapshot.
-- Printer connect fails:
-  - verify `/dev/ttyUSB0` or `/dev/ttyACM0`.
-  - verify user/group has `dialout`.
-  - see **USB serial permissions** below.
-
-### USB serial permissions (`Permission denied`)
-
-USB serial devices are usually owned by **`root:dialout`** with mode **`660`**. The account that runs Flask, the CLI, or the Desktop App must be able to read/write that node.
-
-1. **One-time (persistent across reboot):** `sudo usermod -aG dialout <service_user>` then log out/in, or restart the service. Group membership is stored in `/etc/group`, not lost on reboot.
-2. **systemd:** the bundled [`plotter-signature-flask.service`](../deploy/ubuntu/plotter-signature-flask.service) and [`plotter-pen-kiosk.service`](../deploy/ubuntu/plotter-pen-kiosk.service) include **`SupplementaryGroups=dialout`** so the service process receives the `dialout` group without relying on a login shell. After editing a unit: `sudo systemctl daemon-reload` and restart the service (user units: `systemctl --user daemon-reload`).
-3. **Checks:** `ls -l /dev/ttyUSB* /dev/ttyACM*`; ensure another process is not holding the port (`sudo lsof /dev/ttyUSB0`).
-
-The example Flask unit ships **`User=root`** (root bypasses `dialout`), but production often overrides **`User=`** to a non-root account; then **`dialout`** + **`SupplementaryGroups`** matter.
-
-## 8) Update deployment (new release)
+### USB serial
 
 ```bash
-cd /opt/plotter-signature   # or /opt/Automated_Signature/plotter-signature
+ls -l /dev/ttyUSB* /dev/ttyACM*
+sudo journalctl -u plotter-signature-flask | grep -i autoconnect
+python -m plotter_signature scan-serial --device-match "CH340"
+```
+
+On Raspberry Pi, if CH340 appears in `lsusb` but no `ttyUSB*`: `sudo apt remove -y brltty`.
+
+## 10) Update deployment
+
+```bash
+cd /opt/Automated_Signature/plotter-signature
 git pull
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -161,66 +223,13 @@ pip install -e .
 sudo systemctl restart plotter-signature-flask
 ```
 
-## 9) Install fullscreen Pen Config kiosk app (Raspberry Pi)
+## 11) Full stack checklist
 
-This app is a native fullscreen UI for:
-- status monitoring (including bulk status)
-- changing pen (`PenDown` / `PenUp`)
-- max pen distance input and distance reset
+- [ ] Plotter: venv, `pip install -e .`, env file, Flask unit paths, `active`, `0.0.0.0:5001`
+- [ ] Scanner: see `a4-flating/UBUNTU_RELEASE_GUIDE.md`, `curl :8008/health`
+- [ ] `SCANNER_SERVICE_TOKEN` matches on plotter + scanner
+- [ ] `ufw` allows 22 / 5001 / 8008 (or documented alternative)
+- [ ] Auto-login + pen kiosk on HDMI
+- [ ] Plotter USB → `printer_connected: true` after Flask restart
 
-### 9.1 Install both startup methods
-
-Use both methods for reliability:
-- `systemd --user` service
-- desktop autostart entry
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/ubuntu/plotter-pen-kiosk.service ~/.config/systemd/user/plotter-pen-kiosk.service
-
-mkdir -p ~/.config/autostart
-cp deploy/ubuntu/plotter-pen-kiosk.desktop ~/.config/autostart/plotter-pen-kiosk.desktop
-```
-
-### 9.2 Enable and start user service
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable plotter-pen-kiosk.service
-systemctl --user start plotter-pen-kiosk.service
-systemctl --user status plotter-pen-kiosk.service
-```
-
-To keep user services active even when no session is open (optional):
-
-```bash
-sudo loginctl enable-linger $USER
-```
-
-### 9.3 Verify startup on login
-
-1. Ensure Flask API service is running (`plotter-signature-flask` on port `5001`).
-2. Log out and log in again.
-3. Confirm kiosk app opens fullscreen automatically.
-4. Press `F11` to toggle fullscreen for debugging; `Esc` opens exit confirmation.
-
-### 9.4 Raspberry Pi HDMI / UX recommendations
-
-- Use a resolution that matches your small HDMI panel native mode.
-- Use system font scaling (if needed) so labels remain readable from operator distance.
-- Keep Ubuntu auto-login enabled for dedicated kiosk devices.
-- Avoid screen sleep/blanking in kiosk setup.
-
-### 9.5 Kiosk troubleshooting
-
-- Kiosk window does not open:
-  - `systemctl --user status plotter-pen-kiosk.service`
-  - `journalctl --user -u plotter-pen-kiosk.service -f`
-- API errors in kiosk feedback area:
-  - verify Flask service is reachable with API key header:
-    - `curl -H "X-API-Key: <PLOTTER_API_KEY>" http://127.0.0.1:5001/api/health`
-  - the kiosk reads `PLOTTER_API_KEY` from `/etc/plotter-signature/plotter-signature.env` on **every** request when that file exists and is readable by the logged-in user (`PLOTTER_API_KEY_FILE` overrides the path); otherwise it uses the `PLOTTER_API_KEY` environment variable from the user service.
-  - after rotating the key in that file, **restart Flask** so the server picks up the new secret; the kiosk will pick it up on the next poll without restarting.
-  - verify API key is set in `/configuration` page on the kiosk browser profile (browser UI only).
-- Opens but not fullscreen:
-  - use `F11` and check desktop environment fullscreen restrictions
+See also: `deploy/ubuntu/README.md`.

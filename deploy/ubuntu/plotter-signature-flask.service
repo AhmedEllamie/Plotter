@@ -1,3 +1,7 @@
+# Plotter Flask (system service)
+# Install root (edit before copy, or run deploy/ubuntu/configure-units.sh):
+#   Meta repo:  /opt/Automated_Signature/plotter-signature
+#   Standalone:  /opt/plotter-signature
 [Unit]
 Description=Plotter Signature Flask Service
 After=network-online.target
@@ -9,9 +13,9 @@ User=root
 # USB serial nodes are typically root:dialout mode 660. If you override User= to a non-root
 # account, that user must be in the dialout group (usermod -aG dialout <user>).
 SupplementaryGroups=dialout
-WorkingDirectory=/opt/plotter-signature
+WorkingDirectory=/opt/Automated_Signature/plotter-signature
 EnvironmentFile=/etc/plotter-signature/plotter-signature.env
-ExecStart=/opt/plotter-signature/.venv/bin/python -m plotter_signature serve-flask --host 0.0.0.0 --port 5001
+ExecStart=/opt/Automated_Signature/plotter-signature/.venv/bin/python -m plotter_signature serve-flask --host 0.0.0.0 --port 5001
 Restart=always
 RestartSec=3
 KillSignal=SIGINT

@@ -1,3 +1,5 @@
+# Pen kiosk (user systemd — run after graphical login; do NOT use SupplementaryGroups here)
+# Install root: /opt/Automated_Signature/plotter-signature (or run configure-units.sh)
 [Unit]
 Description=Plotter Pen Config Kiosk (User)
 After=graphical-session.target network-online.target
@@ -5,18 +7,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Serial devices are usually group dialout. Ensures /dev/ttyUSB* and /dev/ttyACM* open after
-# reboot without a login shell; add the desktop user to dialout too: usermod -aG dialout <user>.
-SupplementaryGroups=dialout
-WorkingDirectory=/opt/plotter-signature
+WorkingDirectory=/opt/Automated_Signature/plotter-signature
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY=:0
-# Re-read on every HTTP call when this path is readable by the logged-in user (same file as Flask).
-# Override with PLOTTER_API_KEY_FILE=/path/to/env or set PLOTTER_API_KEY for a static key.
+Environment=XAUTHORITY=%h/.Xauthority
 Environment=PLOTTER_API_KEY_FILE=/etc/plotter-signature/plotter-signature.env
-ExecStart=/opt/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk
-Restart=always
-RestartSec=2
+ExecStart=/opt/Automated_Signature/plotter-signature/.venv/bin/python -m plotter_signature.desktop.pen_kiosk
+Restart=on-failure
+RestartSec=5
 TimeoutStopSec=20
 
 [Install]

@@ -50,15 +50,21 @@ Windows (PowerShell):
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install -e .
 ```
+
+Set `"ComPort": "COM5"` (or your port) in `appsettings.json` for USB serial on Windows.
 
 Linux / macOS:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
+
+On Ubuntu production, see **`docs/UBUNTU_RELEASE_GUIDE.md`** and **`deploy/ubuntu/`** (systemd paths, firewall, kiosk). Default `appsettings.json` uses empty `ComPort` so Linux AutoConnect scans `/dev/ttyUSB*` / `ttyACM*`.
 
 Or install as an editable package:
 
@@ -128,7 +134,7 @@ Optional defaults can be set in `appsettings.json` at the repo root:
 
 ```json
 {
-  "Printer": { "ComPort": "COM5", "BaudRate": 250000 },
+  "Printer": { "ComPort": "", "BaudRate": 250000 },
   "PrintRetry": { "MaxRetries": 3, "RetryDelayMs": 1000 },
   "ApprovalService": {
     "Endpoint": "",

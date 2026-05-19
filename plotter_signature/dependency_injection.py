@@ -69,7 +69,7 @@ def build_service_provider(config: dict[str, Any] | None = None) -> ServiceProvi
     if identity_markers is None:
         identity_markers = list(_DEFAULT_SERIAL_MARKERS)
     printer_settings = PrinterSettings(
-        com_port=str(printer_cfg.get("ComPort", "COM5")),
+        com_port=str(printer_cfg.get("ComPort", "")),
         baud_rate=int(printer_cfg.get("BaudRate", 250000)),
         verify_serial_identity=parse_bool(printer_cfg.get("VerifySerialIdentity"), default=True),
         serial_identity_contains=identity_markers,
