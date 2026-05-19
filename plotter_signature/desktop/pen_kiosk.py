@@ -122,6 +122,7 @@ class PenKioskApp:
         self._inline_error_var = StringVar(value="")
         self._api_feedback_code_var = StringVar(value="")
         self._api_feedback_message_var = StringVar(value="")
+        self._error_code_label: Label | None = None
         self._api_feedback_message_label: Label | None = None
         self._info_server_label: Label | None = None
         self._info_plotter_label: Label | None = None
@@ -191,39 +192,51 @@ class PenKioskApp:
 
     def _build_status_card(self, parent: Frame) -> None:
         bg = "#1e293b"
-        # Section titles and row labels omitted for small HDMI kiosks (values only).
+        # Outer section titles (Info / Meters / Errors) omitted for small HDMI; row labels kept.
         info_panel = self._status_section(parent, "")
         self._prepare_status_grid(info_panel)
         r = 0
-        self._grid_cell_value_var(info_panel, bg, r, 0, self._current_ip_var, wraplength=340)
-        self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 0, "Printer IP")
+        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=340)
+        self._grid_cell_key(info_panel, bg, r, 2, "Server")
+        self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
         r += 1
-        self._info_plotter_label = self._grid_cell_value_plain(info_panel, bg, r, 0)
-        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 0, "Plotter")
+        self._info_plotter_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 2, "State")
+        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
 
         meters_panel = self._status_section(parent, "")
         self._prepare_status_grid(meters_panel)
         r = 0
-        self._grid_cell_value_var(meters_panel, bg, r, 0, self._cumulative_distance_value)
-        self._grid_cell_value_var(meters_panel, bg, r, 1, self._executed_distance_value)
+        self._grid_cell_key(meters_panel, bg, r, 0, "Cumulative distance (m)")
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._cumulative_distance_value)
+        self._grid_cell_key(meters_panel, bg, r, 2, "Executed distance (m)")
+        self._grid_cell_value_var(meters_panel, bg, r, 3, self._executed_distance_value)
         r += 1
-        self._grid_cell_value_var(meters_panel, bg, r, 0, self._execution_percent_value)
-        self._grid_cell_value_var(meters_panel, bg, r, 1, self._pen_remaining_value)
+        self._grid_cell_key(meters_panel, bg, r, 0, "Execution progress")
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._execution_percent_value)
+        self._grid_cell_key(meters_panel, bg, r, 2, "Pen remaining")
+        self._grid_cell_value_var(meters_panel, bg, r, 3, self._pen_remaining_value)
         r += 1
-        self._grid_cell_value_var(meters_panel, bg, r, 0, self._bulk_progress_value)
-        self._grid_cell_value_var(meters_panel, bg, r, 1, self._bulk_stop_value)
+        self._grid_cell_key(meters_panel, bg, r, 0, "Bulk progress")
+        self._grid_cell_value_var(meters_panel, bg, r, 1, self._bulk_progress_value)
+        self._grid_cell_key(meters_panel, bg, r, 2, "Bulk stop requested")
+        self._grid_cell_value_var(meters_panel, bg, r, 3, self._bulk_stop_value)
 
         errors_panel = self._status_section(parent, "")
-        errors_panel.grid_columnconfigure(0, weight=1)
+        self._prepare_status_grid(errors_panel)
+        self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
+        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
+        self._grid_cell_key(errors_panel, bg, 0, 2, "Error message")
         self._api_feedback_message_label = self._grid_cell_value_plain(
             errors_panel,
             bg,
             0,
-            0,
+            3,
             font=("Segoe UI", 12),
             initial_fg="#64748b",
-            wraplength=900,
-            columnspan=4,
+            wraplength=420,
         )
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
@@ -242,10 +255,20 @@ class PenKioskApp:
         return inner
 
     def _prepare_status_grid(self, inner: Frame) -> None:
-        inner.grid_columnconfigure(0, weight=1)
+        inner.grid_columnconfigure(0, weight=0)
         inner.grid_columnconfigure(1, weight=1)
-        inner.grid_columnconfigure(2, weight=1)
+        inner.grid_columnconfigure(2, weight=0)
         inner.grid_columnconfigure(3, weight=1)
+
+    def _grid_cell_key(self, inner: Frame, bg: str, row: int, col: int, text: str) -> None:
+        Label(
+            inner,
+            text=text,
+            bg=bg,
+            fg="#94a3b8",
+            font=("Segoe UI", 12, "bold"),
+            anchor="w",
+        ).grid(row=row, column=col, sticky=W, padx=(0, 8), pady=3)
 
     def _grid_cell_value_var(
         self,
@@ -434,6 +457,8 @@ class PenKioskApp:
     def _clear_error_panel(self) -> None:
         self._api_feedback_code_var.set("")
         self._api_feedback_message_var.set("")
+        if self._error_code_label is not None:
+            self._error_code_label.configure(text="—", fg="#64748b")
         if self._api_feedback_message_label is not None:
             self._api_feedback_message_label.configure(text="—", fg="#64748b")
 
@@ -629,20 +654,20 @@ class PenKioskApp:
         self._api_feedback_code_var.set(code_plain)
         self._api_feedback_message_var.set(trimmed)
 
+        if self._error_code_label is not None:
+            code_display = code_plain if code_plain else "—"
+            self._error_code_label.configure(
+                text=code_display,
+                fg="#fecaca" if is_error and code_plain else "#64748b",
+            )
+
         if self._api_feedback_message_label is not None:
-            if not trimmed and not code_plain:
-                display = "—"
-            elif code_plain and trimmed:
-                display = f"[{code_plain}] {trimmed}"
-            elif code_plain:
-                display = f"[{code_plain}]"
-            else:
-                display = trimmed
+            msg_display = trimmed if trimmed else "—"
             if is_error:
-                self._api_feedback_message_label.configure(text=display, fg="#fecaca")
+                self._api_feedback_message_label.configure(text=msg_display, fg="#fecaca")
             else:
                 self._api_feedback_message_label.configure(
-                    text=display,
+                    text=msg_display,
                     fg="#86efac" if trimmed else "#64748b",
                 )
 
