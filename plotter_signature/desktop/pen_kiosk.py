@@ -103,8 +103,11 @@ class PenKioskApp:
         self._root = Tk()
         self._root.title("Plotter Pen Config Kiosk")
         self._root.configure(bg="#0f172a")
+        self._root.overrideredirect(True)
         self._root.attributes("-fullscreen", True)
-        self._root.bind("<F11>", self._toggle_fullscreen)
+        self._root.attributes("-topmost", True)
+
+        self._root.protocol("WM_DELETE_WINDOW", lambda: None)
 
         self._status_poll_ms = 3000
         self._api_busy = False
