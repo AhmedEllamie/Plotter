@@ -103,7 +103,6 @@ class PenKioskApp:
         self._root = Tk()
         self._root.title("Plotter Pen Config Kiosk")
         self._root.configure(bg="#0f172a")
-        self._root.overrideredirect(True)
         self._root.attributes("-fullscreen", True)
         self._root.attributes("-topmost", True)
 
