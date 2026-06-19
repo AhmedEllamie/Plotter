@@ -184,6 +184,23 @@ Optional: `sudo loginctl enable-linger $USER`
 
 Test Tk once: `python -m plotter_signature.desktop.pen_kiosk` from a terminal on the HDMI session.
 
+### Hide Ubuntu desktop chrome (recommended for touch HDMI)
+
+Touching the **top edge** of the screen can reveal the GNOME panel (taskbar) even when the kiosk is fullscreen. The pen kiosk app re-locks fullscreen on Linux, but for a true “appliance” display you should also hide or disable the panel:
+
+```bash
+# Auto-hide dock (panel still appears on top-edge touch — reduce with next steps)
+gsettings set org.gnome.shell.extensions.dash-to-dock autohide true
+gsettings set org.gnome.shell.extensions.dash-to-dock dock-fixed false
+
+# Optional: disable hot-corner / activities on touch (GNOME version may vary)
+gsettings set org.gnome.desktop.wm.preferences button-layout ':'
+```
+
+For a dedicated Raspberry Pi / HDMI kiosk, consider **Ubuntu Desktop without extensions**, **openbox** session, or a minimal **X11 + openbox** autostart that only launches the kiosk — so no dock is ever drawn.
+
+Development on Linux (allow Alt+F4 / normal window chrome): `PLOTTER_KIOSK_RELAXED=1 python -m plotter_signature.desktop.pen_kiosk`
+
 ## 9) Logs and troubleshooting
 
 ```bash
@@ -200,6 +217,7 @@ journalctl --user -u plotter-pen-kiosk.service -f
 | Kiosk **Server unreachable** | Flask down or wrong IP; check `ss` and `ufw` |
 | Kiosk **Plotter Disconnected** | `printer_connected: false` — serial not open (see Flask logs / AutoConnect) |
 | **`216/GROUP`** on kiosk | Remove `SupplementaryGroups` from **user** kiosk unit |
+| Top touch shows **Ubuntu taskbar** / app minimizes | Redeploy kiosk build; hide GNOME panel (see §8); restart `plotter-pen-kiosk.service` |
 | LAN cannot reach :5001 | `ufw allow 5001/tcp`; confirm `0.0.0.0:5001` |
 
 ### USB serial

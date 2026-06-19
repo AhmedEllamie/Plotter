@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 import threading
 from pathlib import Path
 from tkinter import BOTH, E, LEFT, RIGHT, W, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
@@ -11,6 +12,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 _DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
+
+
+def _strict_kiosk_enabled() -> bool:
+    """Linux touch kiosks: lock fullscreen unless PLOTTER_KIOSK_RELAXED is set."""
+    relaxed = os.getenv("PLOTTER_KIOSK_RELAXED", "").strip().lower()
+    if relaxed in ("1", "true", "yes", "on"):
+        return False
+    return sys.platform.startswith("linux")
 
 
 def _kiosk_settings_path() -> Path:
@@ -103,10 +112,12 @@ class PenKioskApp:
         self._root = Tk()
         self._root.title("Plotter Pen Config Kiosk")
         self._root.configure(bg="#0f172a")
-        self._root.attributes("-fullscreen", True)
-        self._root.attributes("-topmost", True)
+        self._strict_kiosk = _strict_kiosk_enabled()
+        self._kiosk_guard_ms = 800
+        self._kiosk_guard_running = False
 
         self._root.protocol("WM_DELETE_WINDOW", lambda: None)
+        self._setup_kiosk_window()
 
         self._status_poll_ms = 3000
         self._api_busy = False
@@ -138,6 +149,78 @@ class PenKioskApp:
         self._switch_knob: int | None = None
 
         self._build_ui()
+
+    def _setup_kiosk_window(self) -> None:
+        self._apply_kiosk_window_mode()
+        if not self._strict_kiosk:
+            return
+        root = self._root
+        root.bind("<FocusOut>", self._on_kiosk_focus_out, add="+")
+        root.bind("<Unmap>", self._on_kiosk_unmap, add="+")
+        for seq in (
+            "<Escape>",
+            "<F11>",
+            "<Alt-F4>",
+            "<Control-q>",
+            "<Control-Q>",
+            "<Super_L>",
+            "<Super_R>",
+            "<Button-4>",
+            "<Button-5>",
+        ):
+            root.bind_all(seq, self._block_kiosk_exit, add="+")
+
+    def _apply_kiosk_window_mode(self) -> None:
+        root = self._root
+        try:
+            if root.state() == "iconic":
+                root.deiconify()
+        except Exception:
+            pass
+        if self._strict_kiosk:
+            try:
+                root.overrideredirect(True)
+            except Exception:
+                pass
+            try:
+                root.attributes("-type", "splash")
+            except Exception:
+                pass
+        try:
+            root.attributes("-fullscreen", True)
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            root.lift()
+            root.focus_force()
+        except Exception:
+            pass
+
+    def _on_kiosk_focus_out(self, _event: object) -> None:
+        if self._strict_kiosk:
+            self._root.after(50, self._apply_kiosk_window_mode)
+
+    def _on_kiosk_unmap(self, _event: object) -> None:
+        if self._strict_kiosk:
+            self._root.after(10, self._apply_kiosk_window_mode)
+
+    @staticmethod
+    def _block_kiosk_exit(_event: object) -> str:
+        return "break"
+
+    def _start_kiosk_guard(self) -> None:
+        if self._kiosk_guard_running:
+            return
+        self._kiosk_guard_running = True
+        self._kiosk_guard_tick()
+
+    def _kiosk_guard_tick(self) -> None:
+        try:
+            if self._strict_kiosk:
+                self._apply_kiosk_window_mode()
+        finally:
+            self._root.after(self._kiosk_guard_ms, self._kiosk_guard_tick)
 
     def _build_ui(self) -> None:
         root_frame = Frame(self._root, bg="#0f172a", padx=24, pady=20)
@@ -449,10 +532,6 @@ class PenKioskApp:
             self._active_card_idx = 1
         self._apply_active_card()
 
-    def _toggle_fullscreen(self, _event: object) -> None:
-        current = bool(self._root.attributes("-fullscreen"))
-        self._root.attributes("-fullscreen", not current)
-
     def _set_key_value_cell(self, label: Label | None, text: str, fg: str) -> None:
         if label is None:
             return
@@ -742,6 +821,7 @@ class PenKioskApp:
 
     def run(self) -> None:
         self._append_feedback("Pen kiosk started.")
+        self._start_kiosk_guard()
         self._refresh_status()
         self._root.mainloop()
 

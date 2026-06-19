@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 from flask import Flask, Response, request, send_file, send_from_directory
 
 from plotter_signature.dependency_injection import ServiceProvider, get_service_provider
-from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool
+from plotter_signature.domain.contracts import PrintRequest, get_paper_size_mm, parse_bool, parse_paper
 from plotter_signature.infrastructure.errors.api_error_codes import numeric_code_for_legacy
 from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
@@ -251,6 +251,24 @@ def _build_print_request(payload: dict[str, Any] | None) -> PrintRequest:
     return print_request
 
 
+def _print_request_dict_to_profile_block(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a resolved print payload into ui-profile `print` block shape."""
+    print_request = _build_print_request(payload)
+    block: dict[str, Any] = {
+        "width": print_request.width,
+        "height": print_request.height,
+        "xPosition": print_request.x_position,
+        "yPosition": print_request.y_position,
+        "scale": int(print_request.scale),
+        "rotation": int(print_request.rotation),
+        "invertX": print_request.invert_x,
+        "invertY": print_request.invert_y,
+    }
+    if print_request.paper is not None:
+        block["paper"] = print_request.paper.value
+    return block
+
+
 def _extract_print_payload() -> dict[str, Any]:
     json_payload = _get_json_dict()
     if json_payload:
@@ -409,6 +427,11 @@ def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
     capture_data = dict(defaults["capture"])
 
     if isinstance(print_payload, dict):
+        paper_value = print_payload.get("paper") or print_payload.get("Paper")
+        if paper_value is not None and str(paper_value).strip():
+            parsed_paper = parse_paper(str(paper_value))
+            if parsed_paper is not None:
+                print_data["paper"] = parsed_paper.value
         for key in ("width", "height", "xPosition", "yPosition"):
             value = print_payload.get(key)
             if isinstance(value, str) and value.strip():
@@ -507,12 +530,33 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
     _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
 
-    def _resolve_print_request_payload() -> dict[str, Any]:
+    def _resolve_print_request_payload() -> tuple[dict[str, Any], dict[str, Any]]:
         with ui_profile_lock:
             profile_block = ui_profile_data.get("print")
         profile = dict(profile_block) if isinstance(profile_block, dict) else {}
         request_fields = _filter_print_request_fields(_extract_print_payload())
-        return _merge_print_request_payload(profile, request_fields)
+        resolved = _merge_print_request_payload(profile, request_fields)
+        return resolved, request_fields
+
+    def _persist_print_defaults_if_needed(
+        resolved_payload: dict[str, Any],
+        request_fields: dict[str, Any],
+    ) -> None:
+        nonlocal ui_profile_exists
+        has_request_overrides = any(_is_meaningful_print_value(value) for value in request_fields.values())
+        if ui_profile_path.exists() and not has_request_overrides:
+            return
+
+        print_block = _print_request_dict_to_profile_block(resolved_payload)
+        with ui_profile_lock:
+            current_profile = dict(ui_profile_data)
+            current_print = dict(current_profile.get("print") or {})
+            current_print.update(print_block)
+            current_profile["print"] = current_print
+            saved_profile = _save_ui_profile_data(ui_profile_path, current_profile)
+            ui_profile_data.clear()
+            ui_profile_data.update(saved_profile)
+            ui_profile_exists = True
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -1249,7 +1293,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not svg_payload:
             return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
 
-        print_request_dict = _resolve_print_request_payload()
+        print_request_dict, request_fields = _resolve_print_request_payload()
+        try:
+            _persist_print_defaults_if_needed(print_request_dict, request_fields)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
         return _submit_print_job("print", svg_payload, svg_file_name, print_request_dict, copies=1)
 
     @app.post("/api/cmd/print/bulk")
@@ -1276,7 +1324,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except ValueError as ex:
             return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
 
-        print_request_dict = _resolve_print_request_payload()
+        print_request_dict, request_fields = _resolve_print_request_payload()
+        try:
+            _persist_print_defaults_if_needed(print_request_dict, request_fields)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
         return _submit_print_job("bulk", svg_payload, svg_file_name, print_request_dict, copies=copies)
 
     @app.post("/api/cmd/bulk/stop")
