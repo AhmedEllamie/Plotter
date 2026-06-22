@@ -23,3 +23,15 @@ def register_cmd_routes(app: Flask, handlers: dict[str, Callable[..., Any]]) -> 
         methods=["POST"],
     )
     app.add_url_rule("/api/cmd/void", endpoint="cmd_void", view_func=handlers["void_print"], methods=["POST"])
+    app.add_url_rule(
+        "/api/cmd/jobs/queue",
+        endpoint="cmd_jobs_queue",
+        view_func=handlers["command_jobs_queue"],
+        methods=["GET"],
+    )
+    app.add_url_rule(
+        "/api/cmd/jobs/<string:job_id>",
+        endpoint="cmd_job_status",
+        view_func=handlers["command_job_status"],
+        methods=["GET"],
+    )

@@ -80,6 +80,29 @@
       </div>
     </section>
 
+    <section class="dashboard-row dashboard-row-secondary">
+      <section class="card">
+        <h2>Errors</h2>
+        <div class="status-panel">
+          <div class="metric-row">
+            <span>Error code</span>
+            <strong id="errorCodeValue">—</strong>
+          </div>
+          <div class="metric-row">
+            <span>Error message</span>
+            <strong id="errorMessageValue" class="error-message-value">—</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Job Queue</h2>
+        <div id="jobQueueList" class="job-queue-list">
+          <div class="job-queue-empty muted">No active or pending jobs.</div>
+        </div>
+      </section>
+    </section>
+
     <section class="card">
       <h2>Operation Log</h2>
       <div id="logBox" class="log-box"></div>

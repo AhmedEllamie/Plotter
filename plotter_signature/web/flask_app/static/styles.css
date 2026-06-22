@@ -384,6 +384,57 @@ label.radio-inline {
   color: #b42318;
 }
 
+.dashboard-row-secondary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.error-message-value {
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.job-queue-list {
+  min-height: 72px;
+}
+
+.job-queue-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 14px;
+}
+
+.job-queue-item:last-child {
+  border-bottom: none;
+}
+
+.job-queue-item.running {
+  color: #166534;
+  font-weight: 600;
+}
+
+.job-queue-item.pending {
+  color: #475569;
+}
+
+.job-queue-item.finished-ok {
+  color: #64748b;
+}
+
+.job-queue-item.finished-bad {
+  color: #b42318;
+}
+
+.job-queue-empty {
+  padding: 8px 0;
+  font-size: 14px;
+}
+
 .muted {
   color: #64748b;
 }
@@ -400,6 +451,10 @@ label.radio-inline {
 
 @media (max-width: 900px) {
   .dashboard-row {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-row-secondary {
     grid-template-columns: 1fr;
   }
 

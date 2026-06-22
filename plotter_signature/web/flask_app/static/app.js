@@ -3,12 +3,14 @@ const state = {
   lastSvgFile: null,
   capturePollHandle: null,
   statusPollHandle: null,
+  jobPollHandle: null,
   lastBulkCopies: 1,
   bulkRunning: false,
   bulkStopRequested: false,
   bulkRequestedTotal: 0,
   bulkPrintedCount: 0,
   systemInitialized: false,
+  trackedJobs: new Map(),
 };
 
 function appendLog(message, isError = false) {
@@ -28,6 +30,180 @@ function clampPercent(value) {
   const asNumber = Number(value);
   if (!Number.isFinite(asNumber)) return 0;
   return Math.max(0, Math.min(100, asNumber));
+}
+
+function jobTypeLabel(jobType, job) {
+  if (jobType === "bulk") {
+    const copies = job?.copiesRequested ?? "?";
+    return `Bulk (${copies} copies)`;
+  }
+  if (jobType === "bulk_stop") return "Bulk stop";
+  if (jobType === "void") return "Void";
+  return "Print";
+}
+
+function statusLabel(job) {
+  if (job.status === "running") return "running";
+  if (job.status === "pending") return "pending";
+  if (job.status === "finished") return job.outcome || "finished";
+  return job.status || "unknown";
+}
+
+function trackJob(jobId, jobType, extra = {}) {
+  if (!jobId) return;
+  state.trackedJobs.set(String(jobId), {
+    jobId: String(jobId),
+    jobType,
+    status: "pending",
+    ...extra,
+  });
+  ensureJobPolling();
+}
+
+function untrackFinishedJobs() {
+  for (const [jobId, job] of state.trackedJobs.entries()) {
+    if (job.status === "finished") {
+      state.trackedJobs.delete(jobId);
+    }
+  }
+}
+
+function renderErrorPanel(status) {
+  const codeNode = document.getElementById("errorCodeValue");
+  const messageNode = document.getElementById("errorMessageValue");
+  const code = status?.lastApiErrorCode;
+  const message = status?.lastApiErrorMessage;
+  if (codeNode) {
+    codeNode.textContent = code == null || code === "" ? "—" : String(code);
+    codeNode.className = code == null || code === "" ? "" : "error-message-value";
+  }
+  if (messageNode) {
+    messageNode.textContent = message == null || message === "" ? "—" : String(message);
+    messageNode.className = message == null || message === "" ? "" : "error-message-value";
+  }
+}
+
+function renderQueuePanel(queueData) {
+  const container = document.getElementById("jobQueueList");
+  if (!container) return;
+
+  const items = [];
+  if (queueData?.active) {
+    items.push({ ...queueData.active, displayStatus: "running" });
+  }
+  if (Array.isArray(queueData?.pending)) {
+    for (const job of queueData.pending) {
+      items.push({ ...job, displayStatus: "pending" });
+    }
+  }
+
+  container.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "job-queue-empty muted";
+    empty.textContent = "No active or pending jobs.";
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const job of items) {
+    const row = document.createElement("div");
+    const displayStatus = job.displayStatus || job.status;
+    const outcome = job.outcome;
+    let rowClass = "job-queue-item";
+    if (displayStatus === "running") rowClass += " running";
+    else if (displayStatus === "pending") rowClass += " pending";
+    else if (outcome === "failed" || outcome === "stopped") rowClass += " finished-bad";
+    else rowClass += " finished-ok";
+    row.className = rowClass;
+
+    const label = document.createElement("span");
+    label.textContent = jobTypeLabel(job.jobType, job);
+
+    const statusNode = document.createElement("span");
+    statusNode.textContent = statusLabel({ ...job, status: displayStatus });
+
+    row.append(label, statusNode);
+    container.appendChild(row);
+  }
+}
+
+function syncBulkStateFromQueue(queueData) {
+  const active = queueData?.active;
+  const isBulkActive = active?.jobType === "bulk" && active?.status === "running";
+  state.bulkRunning = isBulkActive;
+  if (isBulkActive) {
+    state.bulkRequestedTotal = Number(active.copiesRequested || 0);
+    const progress = active.result?.bulkProgress;
+    if (progress) {
+      state.bulkPrintedCount = Number(progress.printedCount || 0);
+      state.bulkRequestedTotal = Number(progress.requestedTotal || state.bulkRequestedTotal);
+    } else {
+      state.bulkPrintedCount = Number(active.copiesPrinted || 0);
+    }
+  } else if (!state.trackedJobs.size) {
+    state.bulkRunning = false;
+    state.bulkStopRequested = false;
+  }
+  updateBulkProgressLabel();
+  updateBulkUiState();
+  updatePrintCaptureUiState();
+}
+
+async function refreshJobQueue() {
+  try {
+    const queueData = await apiGet("/api/cmd/jobs/queue");
+    renderQueuePanel(queueData);
+    syncBulkStateFromQueue(queueData);
+  } catch (error) {
+    appendLog(`Queue refresh error: ${error.message}`, true);
+  }
+}
+
+async function pollTrackedJobs() {
+  const pendingIds = [...state.trackedJobs.values()]
+    .filter((job) => job.status !== "finished")
+    .map((job) => job.jobId);
+
+  for (const jobId of pendingIds) {
+    try {
+      const snapshot = await apiGet(`/api/cmd/jobs/${encodeURIComponent(jobId)}`);
+      const existing = state.trackedJobs.get(jobId) || { jobId };
+      const merged = { ...existing, ...snapshot };
+      state.trackedJobs.set(jobId, merged);
+
+      if (snapshot.status === "finished") {
+        const label = jobTypeLabel(snapshot.jobType, snapshot);
+        if (snapshot.outcome === "completed") {
+          appendLog(`${label} finished (${snapshot.jobId.slice(0, 8)}…).`);
+        } else {
+          appendLog(
+            `${label} ${snapshot.outcome || "failed"}: ${snapshot.errorMessage || "No details."}`,
+            true
+          );
+        }
+      }
+    } catch (error) {
+      appendLog(`Job ${jobId.slice(0, 8)}… poll error: ${error.message}`, true);
+    }
+  }
+
+  untrackFinishedJobs();
+  await refreshJobQueue();
+
+  const stillActive = [...state.trackedJobs.values()].some((job) => job.status !== "finished");
+  if (!stillActive && state.jobPollHandle) {
+    clearInterval(state.jobPollHandle);
+    state.jobPollHandle = null;
+  }
+}
+
+function ensureJobPolling(intervalMs = 1500) {
+  if (state.jobPollHandle) return;
+  state.jobPollHandle = setInterval(() => {
+    void pollTrackedJobs();
+  }, intervalMs);
+  void pollTrackedJobs();
 }
 
 function updatePrintCaptureUiState() {
@@ -81,12 +257,6 @@ function buildCapturePayload() {
   };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function updateBulkProgressLabel() {
   const node = document.getElementById("bulkProgressLabel");
   if (!node) return;
@@ -127,6 +297,8 @@ function renderStatusGui(status) {
   const executionPercent = clampPercent(status.current_execution_percent);
   const remainingPenPercent = clampPercent(status.remaining_pen_percent);
   const hasPenConfig = Number(status.max_pen_distance_m || 0) > 0;
+
+  renderErrorPanel(status);
 
   setBadgeState(
     "statusConnectionBadge",
@@ -198,6 +370,7 @@ function startAutoStatusRefresh(intervalMs = 3000) {
   }
   state.statusPollHandle = setInterval(() => {
     void refreshStatus({ silent: true });
+    void refreshJobQueue();
   }, intervalMs);
 }
 
@@ -225,23 +398,10 @@ async function selectSvgFromFile(file) {
   }
 }
 
-function logPrintResponse(data, label) {
-  if (data.queued) {
-    appendLog(
-      `${label} queued | job ${data.jobId} | position ${data.queuePosition} | ${data.svgFileName || state.uploadedSvgName || ""}`
-    );
-    return;
-  }
-  const svgName = data.svgFileName || state.uploadedSvgName || "unknown.svg";
-  if (data.jobType === "bulk" && data.result) {
-    appendLog(
-      `${label} | SVG: ${svgName} | copies printed: ${data.result.copies ?? "?"} | commands: ${data.result.total_commands_sent ?? data.commandCount}.`
-    );
-  } else if (data.result) {
-    appendLog(`${label} | SVG: ${svgName} | commands: ${data.result.commands_sent}.`);
-  } else {
-    appendLog(`${label} completed.`);
-  }
+function logJobAccepted(data, label) {
+  appendLog(
+    `${label} accepted | job ${data.jobId} | position ${data.queuePosition ?? "?"} | status ${data.status}`
+  );
 }
 
 async function printUploadedSvg() {
@@ -256,17 +416,13 @@ async function printUploadedSvg() {
   const formData = new FormData();
   formData.append("svg", state.lastSvgFile);
   try {
-    const startedAt = new Date();
-    appendLog(`Print started at ${formatTimestamp(startedAt)}.`);
-   
+    appendLog(`Print submitted at ${formatTimestamp()}.`);
     const data = await apiPostForm("/api/cmd/print", formData);
-    const completedAt = new Date();
-    logPrintResponse(data, "Print");
-    if (!data.queued) {
-      appendLog(`Print finished at ${formatTimestamp(completedAt)}.`);
-    }
+    logJobAccepted(data, "Print");
+    trackJob(data.jobId, data.jobType || "print");
     clearSelectedSvgUi();
     await refreshStatus();
+    await refreshJobQueue();
   } catch (error) {
     appendLog(`Print error: ${error.message}`, true);
   }
@@ -299,56 +455,50 @@ async function bulkPrintUploadedSvg() {
   }
 
   state.lastBulkCopies = copies;
-  state.bulkRunning = true;
   state.bulkStopRequested = false;
   state.bulkRequestedTotal = copies;
   state.bulkPrintedCount = 0;
   updateBulkProgressLabel();
-  updateBulkUiState();
 
   const formData = new FormData();
   formData.append("svg", state.lastSvgFile);
   formData.append("copies", String(copies));
 
   try {
-    appendLog(`Bulk print started (${copies} copies, one server job).`);
+    appendLog(`Bulk print submitted (${copies} copies).`);
     const data = await apiPostForm("/api/cmd/print/bulk", formData);
-    logPrintResponse(data, "Bulk print");
-    state.bulkPrintedCount = data.result?.copies ?? copies;
-    if (!data.queued) {
-      state.bulkRequestedTotal = copies;
-      updateBulkProgressLabel();
-    }
+    logJobAccepted(data, "Bulk print");
+    trackJob(data.jobId, data.jobType || "bulk", { copiesRequested: copies });
+    state.bulkRunning = true;
+    updateBulkUiState();
     clearSelectedSvgUi();
     await refreshStatus();
+    await refreshJobQueue();
   } catch (error) {
     appendLog(`Bulk print error: ${error.message}`, true);
-  } finally {
-    state.bulkRunning = false;
-    state.bulkStopRequested = false;
-    updateBulkUiState();
   }
 }
 
 async function stopBulkPrint() {
-  if (!state.bulkRunning) {
-    appendLog("No bulk print is currently running in this page session.", true);
-    return;
-  }
   state.bulkStopRequested = true;
   try {
-    await apiPostJson("/api/cmd/bulk/stop");
+    const data = await apiPostJson("/api/cmd/bulk/stop");
+    logJobAccepted(data, "Bulk stop");
+    trackJob(data.jobId, data.jobType || "bulk_stop");
+    appendLog("Stop bulk requested.");
+    await refreshJobQueue();
   } catch (error) {
-    appendLog(`Stop request warning: ${error.message}`, true);
+    appendLog(`Stop request error: ${error.message}`, true);
   }
-  appendLog("Stop bulk requested.");
 }
 
 async function runVoid() {
   try {
-    await apiPostJson("/api/cmd/void");
-    appendLog("Void completed.");
+    const data = await apiPostJson("/api/cmd/void");
+    logJobAccepted(data, "Void");
+    trackJob(data.jobId, data.jobType || "void");
     await refreshStatus();
+    await refreshJobQueue();
   } catch (error) {
     appendLog(`Void error: ${error.message}`, true);
   }
@@ -481,6 +631,7 @@ async function initPage() {
   updateBulkUiState();
   await refreshSystemInitStatus();
   await refreshStatus();
+  await refreshJobQueue();
   startAutoStatusRefresh();
   try {
     await loadLatestCapture();

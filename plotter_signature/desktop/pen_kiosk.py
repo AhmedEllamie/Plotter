@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import socket
+import struct
 import threading
 from pathlib import Path
 from tkinter import BOTH, E, LEFT, RIGHT, W, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
@@ -11,6 +13,53 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 _DEFAULT_PLOTTER_ENV_FILE = "/etc/plotter-signature/plotter-signature.env"
+
+
+def _plotter_eth_interface() -> str:
+    return (os.getenv("PLOTTER_ETH_INTERFACE") or "eth0").strip() or "eth0"
+
+
+def _eth_interface_ipv4(iface: str) -> str | None:
+    if os.name != "posix":
+        return None
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            packed = fcntl.ioctl(probe.fileno(), 0x8915, struct.pack("256s", iface.encode()[:15]))
+            return socket.inet_ntoa(packed[20:24])
+        finally:
+            probe.close()
+    except OSError:
+        return None
+
+
+def _is_plotter_eth_connected(ip: str | None) -> bool:
+    if not ip:
+        return False
+    return not ip.startswith("127.")
+
+
+def _plotter_eth_status() -> tuple[str, bool]:
+    iface = _plotter_eth_interface()
+    ip = _eth_interface_ipv4(iface)
+    if ip is None:
+        return "N/A", False
+    return ip, _is_plotter_eth_connected(ip)
+
+
+def _job_queue_label(job: dict[str, object]) -> str:
+    job_type = str(job.get("jobType") or "print")
+    if job_type == "bulk":
+        copies = job.get("copiesRequested", "?")
+        title = f"Bulk ({copies} copies)"
+    elif job_type == "bulk_stop":
+        title = "Bulk stop"
+    elif job_type == "void":
+        title = "Void"
+    else:
+        title = "Print"
+    status = str(job.get("status") or "unknown")
+    return f"{title} — {status}"
 
 
 def _kiosk_settings_path() -> Path:
@@ -31,43 +80,6 @@ def _load_kiosk_settings() -> dict[str, str]:
         return {}
     val = data.get("api_base_url")
     return {"api_base_url": val.strip()} if isinstance(val, str) else {}
-
-
-def _local_ipv4s_for_display() -> str:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            probe.connect(("8.8.8.8", 80))
-            ip = probe.getsockname()[0]
-            if ip and ip not in seen:
-                seen.add(ip)
-                ordered.append(ip)
-        except OSError:
-            pass
-        finally:
-            probe.close()
-    except OSError:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET, type=socket.SOCK_DGRAM):
-            ip = info[4][0]
-            if ip and not ip.startswith("127.") and ip not in seen:
-                seen.add(ip)
-                ordered.append(ip)
-    except OSError:
-        pass
-    if not ordered:
-        try:
-            ip = socket.gethostbyname(socket.gethostname())
-            if ip and ip != "127.0.0.1" and ip not in seen:
-                ordered.append(ip)
-        except OSError:
-            pass
-    if not ordered:
-        return "Unavailable"
-    return ", ".join(ordered)
 
 
 def _read_plotter_api_key_from_file(path: str) -> str:
@@ -109,9 +121,10 @@ class PenKioskApp:
         self._status_poll_ms = 3000
         self._api_busy = False
         self._http_ok = False
-        self._plotter_connected = False
+        self._eth0_connected = False
 
         self._current_ip_var = StringVar(value="Resolving…")
+        self._queue_lines_var = StringVar(value="No active or pending jobs.")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
         self._execution_percent_value = StringVar(value="0.00%")
@@ -125,7 +138,7 @@ class PenKioskApp:
         self._error_code_label: Label | None = None
         self._api_feedback_message_label: Label | None = None
         self._info_server_label: Label | None = None
-        self._info_plotter_label: Label | None = None
+        self._info_eth0_label: Label | None = None
         self._info_state_label: Label | None = None
 
         self._mode_label_var = StringVar(value="Status")
@@ -201,8 +214,8 @@ class PenKioskApp:
         self._grid_cell_key(info_panel, bg, r, 2, "Server")
         self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
         r += 1
-        self._grid_cell_key(info_panel, bg, r, 0, "Plotter")
-        self._info_plotter_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 0, "eth0")
+        self._info_eth0_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
         self._grid_cell_key(info_panel, bg, r, 2, "State")
         self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
 
@@ -240,6 +253,12 @@ class PenKioskApp:
             wraplength=900,
             columnspan=3,
         )
+
+        queue_panel = self._status_section(parent, "")
+        queue_panel.grid_columnconfigure(0, weight=0)
+        queue_panel.grid_columnconfigure(1, weight=1)
+        self._grid_cell_key(queue_panel, bg, 0, 0, "Queue")
+        self._grid_cell_value_var(queue_panel, bg, 0, 1, self._queue_lines_var, wraplength=900)
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
@@ -464,20 +483,44 @@ class PenKioskApp:
         if self._api_feedback_message_label is not None:
             self._api_feedback_message_label.configure(text="—", fg="#64748b")
 
+    def _refresh_job_queue_now(self) -> None:
+        try:
+            queue_data = self._api_get("/api/cmd/jobs/queue")
+        except Exception:
+            self._queue_lines_var.set("Queue unavailable")
+            return
+
+        lines: list[str] = []
+        active = queue_data.get("active")
+        if isinstance(active, dict):
+            lines.append(_job_queue_label(active))
+        pending = queue_data.get("pending")
+        if isinstance(pending, list):
+            for job in pending:
+                if isinstance(job, dict):
+                    lines.append(_job_queue_label(job))
+        self._queue_lines_var.set("\n".join(lines) if lines else "No active or pending jobs.")
+
+    def _apply_eth0_status(self) -> None:
+        ip, connected = _plotter_eth_status()
+        self._eth0_connected = connected
+        self._current_ip_var.set(ip)
+        ok_fg, bad_fg = self._INFO_FG_OK, self._INFO_FG_BAD
+        self._set_key_value_cell(
+            self._info_eth0_label,
+            "Connected" if connected else "Disconnected",
+            ok_fg if connected else bad_fg,
+        )
+
     def _refresh_status_now(self) -> None:
+        self._apply_eth0_status()
         try:
             status = self._api_get("/api/cmd/status")
             self._http_ok = True
-            self._plotter_connected = bool(status.get("printer_connected"))
             is_busy = bool(status.get("is_busy") or status.get("is_printing"))
 
             ok_fg, bad_fg, warn_fg = self._INFO_FG_OK, self._INFO_FG_BAD, self._INFO_FG_WARN
             self._set_key_value_cell(self._info_server_label, "OK", ok_fg)
-            self._set_key_value_cell(
-                self._info_plotter_label,
-                "Connected" if self._plotter_connected else "Disconnected",
-                ok_fg if self._plotter_connected else bad_fg,
-            )
             self._set_key_value_cell(
                 self._info_state_label,
                 "Busy" if is_busy else "Idle",
@@ -510,33 +553,26 @@ class PenKioskApp:
                 self._append_feedback(str(lm), is_error=True, error_code=code_str)
             else:
                 self._clear_error_panel()
+            self._refresh_job_queue_now()
         except HTTPError as ex:
             self._http_ok = False
-            self._plotter_connected = False
             bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
             self._set_key_value_cell(self._info_server_label, f"HTTP {ex.code}", bad_fg)
-            self._set_key_value_cell(self._info_plotter_label, "—", muted_fg)
             self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             code, msg = self._decode_http_error(ex)
             self._append_feedback(msg or f"Status HTTP error: {ex.code}", is_error=True, error_code=code)
         except URLError as ex:
             self._http_ok = False
-            self._plotter_connected = False
             bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
             self._set_key_value_cell(self._info_server_label, "unreachable", bad_fg)
-            self._set_key_value_cell(self._info_plotter_label, "—", muted_fg)
             self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             self._append_feedback(f"Status network error: {ex.reason}", is_error=True)
         except Exception as ex:
             self._http_ok = False
-            self._plotter_connected = False
             bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
             self._set_key_value_cell(self._info_server_label, "error", bad_fg)
-            self._set_key_value_cell(self._info_plotter_label, "—", muted_fg)
             self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             self._append_feedback(f"Status error: {ex}", is_error=True)
-
-        self._current_ip_var.set(_local_ipv4s_for_display())
 
     @staticmethod
     def _decode_http_error(ex: HTTPError) -> tuple[str | None, str]:

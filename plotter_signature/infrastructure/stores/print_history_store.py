@@ -147,6 +147,40 @@ class PrintHistoryStore:
                 )
                 conn.commit()
 
+    def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        if d.get("result_json"):
+            try:
+                d["result"] = json.loads(str(d["result_json"]))
+            except json.JSONDecodeError:
+                d["result"] = None
+        else:
+            d["result"] = None
+        del d["result_json"]
+        return d
+
+    def get_by_id(self, job_id: UUID) -> dict[str, Any] | None:
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute("SELECT * FROM print_jobs WHERE id = ?", (str(job_id),))
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_dict(row)
+
+    def list_active_queue(self) -> list[dict[str, Any]]:
+        with self._lock:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    SELECT * FROM print_jobs
+                    WHERE status IN ('queued', 'started')
+                    ORDER BY queued_at ASC
+                    """
+                )
+                rows = cur.fetchall()
+        return [self._row_to_dict(row) for row in rows]
+
     def list_since(
         self,
         *,
@@ -175,16 +209,4 @@ class PrintHistoryStore:
                     (cutoff, limit),
                 )
                 rows = cur.fetchall()
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            d = dict(row)
-            if d.get("result_json"):
-                try:
-                    d["result"] = json.loads(str(d["result_json"]))
-                except json.JSONDecodeError:
-                    d["result"] = None
-            else:
-                d["result"] = None
-            del d["result_json"]
-            out.append(d)
-        return out
+        return [self._row_to_dict(row) for row in rows]

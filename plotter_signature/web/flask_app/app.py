@@ -312,13 +312,16 @@ def _to_iso8601_utc(value: datetime) -> str:
 
 
 @dataclass
-class _QueuedPrintJob:
+class _CommandJob:
     job_id: UUID
     kind: str
-    svg_payload: bytes
-    svg_file_name: str
-    print_request_dict: dict[str, Any]
-    copies: int
+    svg_payload: bytes | None = None
+    svg_file_name: str = ""
+    print_request_dict: dict[str, Any] | None = None
+    copies: int = 1
+
+
+_NON_SVG_JOB_SHA = "0" * 64
 
 
 def _build_scanner_headers(scanner_settings: ScannerServiceSettings, include_content_type: bool = False) -> dict[str, str]:
@@ -647,11 +650,68 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 except (TypeError, ValueError):
                     pass
 
-    pending_print_queue: queue.Queue[_QueuedPrintJob] = queue.Queue()
-    pending_void_queue: queue.Queue[object] = queue.Queue()
-    _VOID_QUEUE_TICKET = object()
-    print_execution_lock = threading.Lock()
+    command_queue: queue.Queue[_CommandJob] = queue.Queue()
+    command_queue_lock = threading.Lock()
+    pending_job_ids: list[UUID] = []
+    running_job_holder: dict[str, UUID | None] = {"id": None}
     active_history_job_holder: dict[str, UUID | None] = {"id": None}
+    command_worker_lock = threading.Lock()
+    command_worker_started = False
+
+    def _compute_queue_position(job_id: UUID) -> int | None:
+        with command_queue_lock:
+            order: list[UUID] = []
+            running_id = running_job_holder.get("id")
+            if running_id is not None:
+                order.append(running_id)
+            order.extend(pending_job_ids)
+        try:
+            return order.index(job_id) + 1
+        except ValueError:
+            return None
+
+    def _job_db_status_to_api(db_status: str) -> tuple[str, str | None]:
+        if db_status == "queued":
+            return "pending", None
+        if db_status == "started":
+            return "running", None
+        if db_status in ("completed", "failed", "stopped"):
+            return "finished", db_status
+        return "finished", "failed"
+
+    def _job_public_dict(row: dict[str, Any], *, queue_position: int | None = None) -> dict[str, Any]:
+        api_status, outcome = _job_db_status_to_api(str(row.get("status") or ""))
+        job_type = str(row.get("job_type") or "")
+        result_blob = row.get("result")
+        error_message = row.get("error_message")
+        error_code = None
+        result_payload = None
+        if isinstance(result_blob, dict):
+            error_code = result_blob.get("errorCode")
+            if isinstance(result_blob.get("payload"), dict):
+                result_payload = result_blob["payload"]
+            elif api_status == "finished" and outcome == "completed":
+                result_payload = result_blob
+        out: dict[str, Any] = {
+            "jobId": str(row.get("id") or ""),
+            "jobType": job_type,
+            "status": api_status,
+            "outcome": outcome,
+            "errorMessage": error_message,
+            "errorCode": error_code,
+            "queuedAt": row.get("queued_at"),
+            "startedAt": row.get("started_at"),
+            "completedAt": row.get("completed_at"),
+            "svgFileName": row.get("signature_file_name") or None,
+            "signatureSha256": row.get("signature_sha256") or None,
+            "copiesRequested": int(row.get("copies_requested") or 0),
+            "copiesPrinted": row.get("copies_printed"),
+        }
+        if queue_position is not None and api_status == "pending":
+            out["queuePosition"] = queue_position
+        if result_payload is not None:
+            out["result"] = result_payload
+        return out
 
     def _apply_print_stop_side_effects() -> dict[str, Any]:
         jid = active_history_job_holder.get("id")
@@ -667,13 +727,13 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         runtime_state.clear_uploaded_svg()
         return {"jobStopped": True}
 
-    def _execute_queued_job(job: _QueuedPrintJob) -> dict[str, Any]:
+    def _execute_print_job(job: _CommandJob) -> None:
         runtime_state.clear_bulk_graceful_stop_ack()
         active_history_job_holder["id"] = job.job_id
         provider.print_history_store.update_started(job.job_id)
         try:
-            print_request = _build_print_request(job.print_request_dict)
-            gcode = _convert_svg(job.svg_payload, print_request)
+            print_request = _build_print_request(job.print_request_dict or {})
+            gcode = _convert_svg(job.svg_payload or b"", print_request)
             if job.kind == "bulk":
                 print_result = _run_async(provider.printer_service.bulk_print(gcode, job.copies))
                 copies_printed = int(print_result.copies or 0)
@@ -704,38 +764,101 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                 result_json={"payload": data},
             )
             runtime_state.clear_uploaded_svg()
-            return data
         except Exception as ex:
             provider.print_history_store.update_completed(job.job_id, status="failed", error_message=str(ex))
             runtime_state.clear_uploaded_svg()
-            raise
         finally:
             active_history_job_holder["id"] = None
 
-    def _drain_pending_void_queue() -> None:
-        while True:
-            try:
-                pending_void_queue.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                _run_async(provider.printer_service.void_print())
-            except (RuntimeError, Exception):
-                pass
+    def _execute_void_job(job: _CommandJob) -> None:
+        provider.print_history_store.update_started(job.job_id)
+        try:
+            _run_async(provider.printer_service.void_print())
+            provider.print_history_store.update_completed(job.job_id, status="completed")
+        except Exception as ex:
+            provider.print_history_store.update_completed(job.job_id, status="failed", error_message=str(ex))
 
-    def _drain_pending_print_queue() -> None:
-        while True:
-            try:
-                next_job = pending_print_queue.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                _execute_queued_job(next_job)
-            except (ValueError, RuntimeError, Exception):
-                pass
-        _drain_pending_void_queue()
+    def _execute_bulk_stop_job(job: _CommandJob) -> None:
+        provider.print_history_store.update_started(job.job_id)
+        try:
+            stop_requested = provider.printer_service.stop_bulk_print()
+            if not stop_requested:
+                provider.print_history_store.update_completed(
+                    job.job_id,
+                    status="failed",
+                    error_message="No active print job to stop.",
+                    result_json={"errorCode": "PRINTER_NOT_BUSY"},
+                )
+                return
+            runtime_state.set_bulk_graceful_stop_ack(True)
+            data = _apply_print_stop_side_effects()
+            data["status"] = _slim_bulk_stop_status_payload(provider, runtime_state)
+            provider.print_history_store.update_completed(
+                job.job_id,
+                status="completed",
+                result_json={"payload": data},
+            )
+        except Exception as ex:
+            provider.print_history_store.update_completed(job.job_id, status="failed", error_message=str(ex))
 
-    def _submit_print_job(
+    def _execute_command_job(job: _CommandJob) -> None:
+        if job.kind in ("print", "bulk"):
+            _execute_print_job(job)
+        elif job.kind == "void":
+            _execute_void_job(job)
+        elif job.kind == "bulk_stop":
+            _execute_bulk_stop_job(job)
+        else:
+            provider.print_history_store.update_completed(
+                job.job_id,
+                status="failed",
+                error_message=f"Unknown job kind: {job.kind}",
+            )
+
+    def _command_worker_loop() -> None:
+        while True:
+            job = command_queue.get()
+            with command_queue_lock:
+                if pending_job_ids and pending_job_ids[0] == job.job_id:
+                    pending_job_ids.pop(0)
+                running_job_holder["id"] = job.job_id
+            try:
+                _execute_command_job(job)
+            finally:
+                with command_queue_lock:
+                    if running_job_holder.get("id") == job.job_id:
+                        running_job_holder["id"] = None
+                command_queue.task_done()
+
+    def _ensure_command_worker() -> None:
+        nonlocal command_worker_started
+        with command_worker_lock:
+            if command_worker_started:
+                return
+            command_worker_started = True
+            worker = threading.Thread(target=_command_worker_loop, daemon=True, name="command-job-worker")
+            worker.start()
+
+    def _enqueue_command_response(job_uuid: UUID, kind: str) -> tuple[Response, int]:
+        _ensure_command_worker()
+        position = _compute_queue_position(job_uuid)
+        label = {
+            "print": "Print job accepted.",
+            "bulk": "Bulk print job accepted.",
+            "void": "Void job accepted.",
+            "bulk_stop": "Bulk stop job accepted.",
+        }.get(kind, "Command job accepted.")
+        return api_success(
+            message=label,
+            data={
+                "jobId": str(job_uuid),
+                "jobType": kind,
+                "status": "pending",
+                "queuePosition": position,
+            },
+        )
+
+    def _enqueue_print_job(
         kind: str,
         svg_payload: bytes,
         svg_file_name: str,
@@ -750,7 +873,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             signature_sha256=sha,
             copies_requested=copies if kind == "bulk" else 1,
         )
-        job = _QueuedPrintJob(
+        job = _CommandJob(
             job_id=job_uuid,
             kind=kind,
             svg_payload=svg_payload,
@@ -758,43 +881,37 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             print_request_dict=dict(print_request_dict),
             copies=copies,
         )
+        with command_queue_lock:
+            pending_job_ids.append(job_uuid)
+        command_queue.put(job)
+        return _enqueue_command_response(job_uuid, kind)
 
-        if not print_execution_lock.acquire(blocking=False):
-            pending_print_queue.put(job)
-            return api_success(
-                message="Printer busy; print job queued.",
-                data={
-                    "queued": True,
-                    "jobId": str(job_uuid),
-                    "queuePosition": pending_print_queue.qsize(),
-                    "jobType": kind,
-                    "signatureSha256": sha,
-                    "svgFileName": svg_name,
-                },
-                status_code=202,
-            )
+    def _enqueue_simple_command(kind: str) -> tuple[Response, int]:
+        job_uuid = provider.print_history_store.insert_queued(
+            job_type=kind,
+            signature_file_name="",
+            signature_sha256=_NON_SVG_JOB_SHA,
+            copies_requested=1,
+        )
+        job = _CommandJob(job_id=job_uuid, kind=kind)
+        with command_queue_lock:
+            pending_job_ids.append(job_uuid)
+        command_queue.put(job)
+        return _enqueue_command_response(job_uuid, kind)
 
-        try:
-            try:
-                out = _execute_queued_job(job)
-                _drain_pending_print_queue()
-                return api_success(
-                    message="Print completed." if kind == "print" else "Bulk print completed.",
-                    data={**out, "queued": False, "jobId": str(job_uuid), "jobType": kind},
-                )
-            except ValueError as ex:
-                _drain_pending_print_queue()
-                return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
-            except RuntimeError as ex:
-                _drain_pending_print_queue()
-                return api_error(str(ex), error_code="PRINT_RUNTIME_ERROR", status_code=400)
-            except Exception as ex:
-                _drain_pending_print_queue()
-                if kind == "bulk":
-                    return api_error(f"Bulk print failed: {ex}", error_code="BULK_PRINT_FAILED", status_code=500)
-                return api_error(f"Print failed: {ex}", error_code="PRINT_FAILED", status_code=500)
-        finally:
-            print_execution_lock.release()
+    def _void_queue_depth() -> int:
+        depth = 0
+        with command_queue_lock:
+            job_ids: list[UUID] = []
+            running_id = running_job_holder.get("id")
+            if running_id is not None:
+                job_ids.append(running_id)
+            job_ids.extend(pending_job_ids)
+        for jid in job_ids:
+            row = provider.print_history_store.get_by_id(jid)
+            if row and str(row.get("job_type") or "") == "void":
+                depth += 1
+        return depth
 
     @app.before_request
     def require_api_key_for_api_routes() -> tuple[Response, int] | None:
@@ -1354,8 +1471,46 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data=_printer_status_public_dict(
                 provider,
                 runtime_state,
-                void_queue_depth=pending_void_queue.qsize(),
+                void_queue_depth=_void_queue_depth(),
             ),
+        )
+
+    @app.get("/api/cmd/jobs/queue")
+    def command_jobs_queue() -> tuple[Response, int]:
+        active_row: dict[str, Any] | None = None
+        pending_rows: list[dict[str, Any]] = []
+        with command_queue_lock:
+            running_id = running_job_holder.get("id")
+            pending_ids = list(pending_job_ids)
+        if running_id is not None:
+            row = provider.print_history_store.get_by_id(running_id)
+            if row is not None:
+                active_row = _job_public_dict(row)
+        for idx, jid in enumerate(pending_ids):
+            row = provider.print_history_store.get_by_id(jid)
+            if row is not None:
+                pending_rows.append(_job_public_dict(row, queue_position=idx + (2 if running_id else 1)))
+        return api_success(
+            message="Command job queue loaded.",
+            data={"active": active_row, "pending": pending_rows},
+        )
+
+    @app.get("/api/cmd/jobs/<string:job_id>")
+    def command_job_status(job_id: str) -> tuple[Response, int]:
+        job_id = job_id.strip()
+        if not job_id:
+            return api_error("job_id is required.", error_code="PRINT_VALIDATION_ERROR", status_code=400)
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            return api_error("Invalid job_id.", error_code="PRINT_VALIDATION_ERROR", status_code=400)
+        row = provider.print_history_store.get_by_id(job_uuid)
+        if row is None:
+            return api_error("Command job not found.", error_code="CMD_JOB_NOT_FOUND", status_code=404)
+        position = _compute_queue_position(job_uuid)
+        return api_success(
+            message="Command job status loaded.",
+            data=_job_public_dict(row, queue_position=position),
         )
 
     @app.post("/api/cmd/print")
@@ -1390,7 +1545,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             _build_print_request(print_request_dict)
         except ValueError as ex:
             return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
-        return _submit_print_job("print", svg_payload, svg_file_name, print_request_dict, copies=1)
+        return _enqueue_print_job("print", svg_payload, svg_file_name, print_request_dict, copies=1)
 
     @app.post("/api/cmd/print/bulk")
     def bulk_print_svg() -> tuple[Response, int]:
@@ -1429,64 +1584,23 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             _build_print_request(print_request_dict)
         except ValueError as ex:
             return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
-        return _submit_print_job("bulk", svg_payload, svg_file_name, print_request_dict, copies=copies)
+        return _enqueue_print_job("bulk", svg_payload, svg_file_name, print_request_dict, copies=copies)
 
     @app.post("/api/cmd/bulk/stop")
     def stop_bulk_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
-            stop_requested = provider.printer_service.stop_bulk_print()
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
-        except Exception as ex:
-            return api_error(f"Failed to stop bulk print: {ex}", error_code="BULK_STOP_FAILED", status_code=500)
-
-        if not stop_requested:
-            return api_error("No active print job to stop.", error_code="PRINTER_NOT_BUSY", status_code=409)
-
-        runtime_state.set_bulk_graceful_stop_ack(True)
-        data = _apply_print_stop_side_effects()
-        data["status"] = _slim_bulk_stop_status_payload(provider, runtime_state)
-
-        return api_success(
-            message="Bulk stop requested. The current copy will finish; remaining copies will not start.",
-            data=data,
-        )
+        return _enqueue_simple_command("bulk_stop")
 
     @app.post("/api/cmd/void")
     def void_print() -> tuple[Response, int]:
         try:
             _ensure_connected(provider)
-            if not print_execution_lock.acquire(blocking=False):
-                pending_void_queue.put(_VOID_QUEUE_TICKET)
-                depth = pending_void_queue.qsize()
-                return api_success(
-                    message="Void queued; will run when the printer is available.",
-                    data={
-                        "voidQueued": True,
-                        "voidQueueDepth": depth,
-                        "voidAfterPrintPending": True,
-                    },
-                    status_code=202,
-                )
-            try:
-                try:
-                    _run_async(provider.printer_service.void_print())
-                    _drain_pending_void_queue()
-                finally:
-                    _drain_pending_print_queue()
-            finally:
-                print_execution_lock.release()
         except RuntimeError as ex:
             return api_error(str(ex), error_code="VOID_RUNTIME_ERROR", status_code=409)
-        except Exception as ex:
-            return api_error(f"Void print failed: {ex}", error_code="VOID_FAILED", status_code=500)
-
-        remaining = pending_void_queue.qsize()
-        return api_success(
-            message="Void print completed." if remaining == 0 else "Void print completed; more void jobs are queued.",
-            data={"voidQueued": remaining > 0, "voidQueueDepth": remaining},
-        )
+        return _enqueue_simple_command("void")
 
     @app.post("/api/config/change-pen/start")
     def change_pen_start() -> tuple[Response, int]:

@@ -115,6 +115,7 @@ All failing JSON responses that use the standard envelope expose a numeric top-l
 | 1040        | `CAPTURE_SETTINGS_NOT_ALLOWED`        |
 | 1041        | `CONFIG_NOT_INITIALIZED`              |
 | 1042        | `PRINT_SETTINGS_NOT_ALLOWED`          |
+| 1043        | `CMD_JOB_NOT_FOUND`                   |
 | 0           | *(unregistered / unknown legacy key)* |
 
 
@@ -347,30 +348,18 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 
 **Preconditions:** Printer connected; otherwise `409` `PRINTER_STATE_ERROR`.
 
-**Success `data` (immediate completion, HTTP `200`)**
+**Success `data` (HTTP `200` — job accepted, execution is asynchronous)**
 
 
-| Field          | Type      | Description                                                                                                                |
-| -------------- | --------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `queued`       | `boolean` | `false`.                                                                                                                   |
-| `jobId`        | `string`  | UUID string, print history row id.                                                                                         |
-| `jobType`      | `string`  | `"print"`.                                                                                                                 |
-| `svgFileName`  | `string`  | Original upload name.                                                                                                      |
-| `commandCount` | `integer` | G-code line count.                                                                                                         |
-| `result`       | `object`  | Slim print summary: `commands_sent`, `cumulative_distance_mm`, `executed_distance_mm`, `execution_percent`, `job_stopped`. |
+| Field           | Type      | Description                                              |
+| --------------- | --------- | -------------------------------------------------------- |
+| `jobId`         | `string`  | UUID string; poll with `GET /api/cmd/jobs/{jobId}`.      |
+| `jobType`       | `string`  | `"print"`.                                               |
+| `status`        | `string`  | `"pending"` at accept time.                              |
+| `queuePosition` | `integer` | 1-based position in the FIFO command queue.              |
 
 
-**Queued `data` (HTTP `202`)**
-
-
-| Field             | Type      | Description                                        |
-| ----------------- | --------- | -------------------------------------------------- |
-| `queued`          | `boolean` | `true`.                                            |
-| `jobId`           | `string`  | UUID string.                                       |
-| `queuePosition`   | `integer` | Queue depth after enqueue (`queue.Queue.qsize()`). |
-| `jobType`         | `string`  | `"print"`.                                         |
-| `signatureSha256` | `string`  | Hex SHA-256 of SVG bytes.                          |
-| `svgFileName`     | `string`  | Filename.                                          |
+Poll **`GET /api/cmd/jobs/{jobId}`** until `status` is `finished`; then read `outcome` (`completed`, `failed`, or `stopped`) and optional `result` payload.
 
 
 **Error `errorCode`**
@@ -396,43 +385,17 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
   -F "svg=@./signature.svg;type=image/svg+xml"
 ```
 
-**Example response** `200` (job ran immediately)
+**Example response** `200` (job accepted)
 
 ```json
 {
   "success": true,
-  "message": "Print completed.",
+  "message": "Print job accepted.",
   "data": {
-    "svgFileName": "signature.svg",
-    "commandCount": 842,
-    "result": {
-      "commands_sent": 840,
-      "cumulative_distance_mm": 12606.57,
-      "executed_distance_mm": 156.32,
-      "execution_percent": 100.0,
-      "job_stopped": false
-    },
-    "queued": false,
     "jobId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-    "jobType": "print"
-  },
-  "errorCode": null
-}
-```
-
-**Example response** `202` (printer busy, queued)
-
-```json
-{
-  "success": true,
-  "message": "Printer busy; print job queued.",
-  "data": {
-    "queued": true,
-    "jobId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-    "queuePosition": 1,
     "jobType": "print",
-    "signatureSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "svgFileName": "signature.svg"
+    "status": "pending",
+    "queuePosition": 1
   },
   "errorCode": null
 }
@@ -464,18 +427,7 @@ Same `**multipart/form-data**` as single print (**`svg`** / **`file`** only — 
 
 `copies` sources (first hit wins in code): JSON body `copies`, form `copies`, query `copies`.
 
-**Success `data` (HTTP `200`, not queued):** Same pattern as single print, plus:
-
-
-| Field          | Type     | Description                                                                              |
-| -------------- | -------- | ---------------------------------------------------------------------------------------- |
-| `bulkProgress` | `object` | `requestedTotal`, `printedCount`, `stopRequested`.                                       |
-| `result`       | `object` | Slim bulk summary: `cumulative_distance_mm`, `execution_percent`, `total_commands_sent`. |
-
-
-**Queued `data` (HTTP `202`):** Same shape as print queue response; `jobType` is `"bulk"`.
-
-**Extra `errorCode`:** `1017` (`PRINT_FAILED`) on HTTP `500`.
+**Success `data` (HTTP `200` — job accepted):** Same async accept shape as single print; `jobType` is `"bulk"`. Poll `GET /api/cmd/jobs/{jobId}` for `bulkProgress` and slim `result` when finished.
 
 **Example request**
 
@@ -491,27 +443,50 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 ```json
 {
   "success": true,
-  "message": "Bulk print completed.",
+  "message": "Bulk print job accepted.",
   "data": {
-    "svgFileName": "signature.svg",
-    "commandCount": 842,
-    "result": {
-      "cumulative_distance_mm": 13388.17,
-      "execution_percent": 100.0,
-      "total_commands_sent": 4200
-    },
-    "bulkProgress": {
-      "requestedTotal": 5,
-      "printedCount": 5,
-      "stopRequested": false
-    },
-    "queued": false,
     "jobId": "550e8400-e29b-41d4-a716-446655440000",
-    "jobType": "bulk"
+    "jobType": "bulk",
+    "status": "pending",
+    "queuePosition": 2
   },
   "errorCode": null
 }
 ```
+
+---
+
+### `GET /api/cmd/jobs/queue`
+
+Returns the server-wide FIFO command queue (print, bulk, void, bulk_stop).
+
+**Success `data`**
+
+| Field     | Type     | Description                                      |
+| --------- | -------- | ------------------------------------------------ |
+| `active`  | `object` | Currently running job snapshot, or `null`.       |
+| `pending` | `array`  | Pending jobs in order (each same shape as below). |
+
+---
+
+### `GET /api/cmd/jobs/{job_id}`
+
+Poll async command job status.
+
+**Success `data`**
+
+| Field           | Type      | Description                                                       |
+| --------------- | --------- | ----------------------------------------------------------------- |
+| `jobId`         | `string`  | UUID.                                                             |
+| `jobType`       | `string`  | `print`, `bulk`, `void`, or `bulk_stop`.                          |
+| `status`        | `string`  | `pending`, `running`, or `finished`.                              |
+| `outcome`       | `string`  | When finished: `completed`, `failed`, or `stopped`; else `null`.  |
+| `queuePosition` | `integer` | Present when `status` is `pending`.                               |
+| `result`        | `object`  | When finished successfully, slim print/bulk/stop payload.         |
+| `errorMessage`  | `string`  | When failed.                                                      |
+| `errorCode`     | `string`  | When failed (e.g. `PRINTER_NOT_BUSY` on bulk_stop).               |
+
+**Error `errorCode`:** `1043` (`CMD_JOB_NOT_FOUND`) on HTTP `404`.
 
 ---
 
@@ -523,42 +498,28 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 | —        | —    | —    | —        | No body.    |
 
 
-**Success `data`**
+**Success `data` (HTTP `200` — job accepted)**
 
+| Field           | Type      | Description                                 |
+| --------------- | --------- | ------------------------------------------- |
+| `jobId`         | `string`  | UUID; poll until finished.                  |
+| `jobType`       | `string`  | `"bulk_stop"`.                              |
+| `status`        | `string`  | `"pending"`.                                |
+| `queuePosition` | `integer` | Queue position.                             |
 
-| Field        | Type      | Description                                                                                                                                                                                                                               |
-| ------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jobStopped` | `boolean` | Always `true` when stop was accepted (history side effect).                                                                                                                                                                               |
-| `status`     | `object`  | Slim snapshot (not full `GET /api/cmd/status`): `bulk_printed_count`, `bulk_requested_total`, `cumulative_distance_mm`, `current_svg_total_distance_mm`, `remaining_pen_percent`, `used_pen_distance_m` — same count semantics as status. |
-
-
-Side effects: requests **graceful** bulk stop (current copy runs to completion and ejects; further copies are not started). **`POST /api/cmd/void` no longer cancels an active print**; it queues a void for after the job (see [void](#post-apicmdvoid)). Marks active history job `stopped`, clears uploaded SVG. Use **one HTTP worker process** per deployment if you rely on `GET /api/cmd/status` staying in sync with bulk stop across requests.
-
-**Example request**
-
-```bash
-curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
-  -H "X-API-Key: QSCWDVEFBRGN" \
-  -H "Content-Type: application/json" \
-  -d "{}"
-```
+When the job runs, it requests graceful bulk stop. If no bulk job is active at execution time, the job finishes with `outcome: failed` and `errorCode: PRINTER_NOT_BUSY`. The **running bulk print job** (separate `jobId`) shows `outcome: stopped` when G-code completes.
 
 **Example response** `200`
 
 ```json
 {
   "success": true,
-  "message": "Bulk stop requested. The current copy will finish; remaining copies will not start.",
+  "message": "Bulk stop job accepted.",
   "data": {
-    "jobStopped": true,
-    "status": {
-      "bulk_printed_count": 3,
-      "bulk_requested_total": 10,
-      "cumulative_distance_mm": 13100.5,
-      "current_svg_total_distance_mm": 156.32,
-      "remaining_pen_percent": 89.45,
-      "used_pen_distance_m": 13.1
-    }
+    "jobId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "jobType": "bulk_stop",
+    "status": "pending",
+    "queuePosition": 1
   },
   "errorCode": null
 }
@@ -574,11 +535,18 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
 | —        | —    | —    | —        | No body.    |
 
 
-**Idle printer (not printing):** runs the full void/eject-safe sequence (handshake, paper ready, init, eject). Success **`data`:** `{}`. Use **`message`** for the outcome text. While this void is running, **`POST /api/cmd/print`** / **bulk** use the same submission lock as print jobs: expect **202** with `queued: true` if another client submits a print during void; the queue is drained when void finishes.
+Enqueues a void command in the unified FIFO queue (same queue as print/bulk/stop). Does **not** block until G-code completes. Poll `GET /api/cmd/jobs/{jobId}` for outcome.
 
-**While a print or bulk job is active (`is_printing`):** does **not** cancel mid-job. Sets a **coalesced** pending void; success **`data`:** `{ "voidQueued": true, "voidAfterPrintPending": true }`. After the job completes (including its normal `finally` eject), the server runs **`void_print()`** once automatically. Poll `[GET /api/cmd/status](#get-apicmdstatus)` for `void_after_print_pending`.
+**Success `data` (HTTP `200`)**
 
-If a queued void fails internally, the error is logged; the print job outcome is unchanged. Call `POST /api/cmd/void` again when idle if you still need a void cycle.
+| Field           | Type      | Description                |
+| --------------- | --------- | -------------------------- |
+| `jobId`         | `string`  | UUID.                      |
+| `jobType`       | `string`  | `"void"`.                  |
+| `status`        | `string`  | `"pending"`.               |
+| `queuePosition` | `integer` | Position in command queue. |
+
+Void jobs run in strict submission order with print/bulk/stop jobs.
 
 **Example request (idle)**
 
@@ -589,30 +557,19 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
   -d "{}"
 ```
 
-**Example response** `200` (idle — void cycle completed)
+**Example response** `200`
 
 ```json
 {
   "success": true,
-  "message": "Void print completed.",
-  "data": {},
-  "errorCode": null,
-  "details": null
-}
-```
-
-**Example response** `200` (void accepted while printing — queued)
-
-```json
-{
-  "success": true,
-  "message": "Void queued; it will run automatically after the current print or bulk job completes.",
+  "message": "Void job accepted.",
   "data": {
-    "voidQueued": true,
-    "voidAfterPrintPending": true
+    "jobId": "8f14e45f-ea12-4b34-9c12-6b7d64202400",
+    "jobType": "void",
+    "status": "pending",
+    "queuePosition": 3
   },
-  "errorCode": null,
-  "details": null
+  "errorCode": null
 }
 ```
 
@@ -1142,6 +1099,8 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | ------ | --------------------- |
 | `GET`  | `/api/cmd/health`     |
 | `GET`  | `/api/cmd/status`     |
+| `GET`  | `/api/cmd/jobs/queue` |
+| `GET`  | `/api/cmd/jobs/{job_id}` |
 | `POST` | `/api/cmd/print`      |
 | `POST` | `/api/cmd/print/bulk` |
 | `POST` | `/api/cmd/bulk/stop`  |

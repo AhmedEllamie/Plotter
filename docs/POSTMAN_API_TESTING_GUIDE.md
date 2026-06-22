@@ -89,10 +89,12 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | ------ | ---- | ------------- | -------------------- | -------------------------- |
 | GET | `/api/cmd/health` | — | 200 | `printerConnected`, `printerBusy`, `captureResetConfigured` |
 | GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
-| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, slim `result` (see [API_REFERENCE](API_REFERENCE.md#post-apicmdprint)). 202: `queued: true`, `jobId`, `queuePosition`, … |
-| POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `bulkProgress`; no top-level `copies` on 200; `result` is slim bulk summary |
-| POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — graceful bulk stop after current copy |
-| POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Idle: `data` is `{}` (use `message`). Busy: `{ "status": … }` |
+| GET | `/api/cmd/jobs/queue` | — | 200 | `{ "active": job\|null, "pending": [ … ] }` |
+| GET | `/api/cmd/jobs/{jobId}` | — | 200 | `jobId`, `jobType`, `status`, `outcome`, `queuePosition`, `result` |
+| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 | Async accept: `jobId`, `jobType`, `status` (`pending`), `queuePosition` — poll job status until `finished` |
+| POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 | Same async accept shape; `jobType` is `bulk` |
+| POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`bulk_stop`), `status`, `queuePosition` |
+| POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`void`), `status`, `queuePosition` |
 
 ### Common command error codes (non-exhaustive)
 
