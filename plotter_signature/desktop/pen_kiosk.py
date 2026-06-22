@@ -47,6 +47,39 @@ def _plotter_eth_status() -> tuple[str, bool]:
     return ip, _is_plotter_eth_connected(ip)
 
 
+def _host_ipv4s_for_display() -> str:
+    """Non-loopback LAN/Wi-Fi IPs on the kiosk PC (reachable from lab network / laptop)."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    plotter_iface = _plotter_eth_interface()
+    plotter_ip = _eth_interface_ipv4(plotter_iface)
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            ip = probe.getsockname()[0]
+            if ip and not ip.startswith("127.") and ip != plotter_ip and ip not in seen:
+                seen.add(ip)
+                ordered.append(ip)
+        except OSError:
+            pass
+        finally:
+            probe.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET, type=socket.SOCK_DGRAM):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip != plotter_ip and ip not in seen:
+                seen.add(ip)
+                ordered.append(ip)
+    except OSError:
+        pass
+    if not ordered:
+        return "Unavailable"
+    return ", ".join(ordered)
+
+
 def _job_queue_label(job: dict[str, object]) -> str:
     job_type = str(job.get("jobType") or "print")
     if job_type == "bulk":
@@ -132,6 +165,7 @@ class PenKioskApp:
         self._eth0_connected = False
 
         self._current_ip_var = StringVar(value="Resolving…")
+        self._host_ip_var = StringVar(value="Resolving…")
         self._queue_lines_var = StringVar(value="No active or pending jobs.")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
@@ -217,15 +251,18 @@ class PenKioskApp:
         info_panel = self._status_section(parent, "")
         self._prepare_status_grid(info_panel)
         r = 0
-        self._grid_cell_key(info_panel, bg, r, 0, "Printer IP")
-        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=340)
+        self._grid_cell_key(info_panel, bg, r, 0, "Host IP")
+        self._grid_cell_value_var(info_panel, bg, r, 1, self._host_ip_var, wraplength=340)
         self._grid_cell_key(info_panel, bg, r, 2, "Server")
         self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
         r += 1
-        self._grid_cell_key(info_panel, bg, r, 0, "eth0")
-        self._info_eth0_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
-        self._grid_cell_key(info_panel, bg, r, 2, "State")
-        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
+        self._grid_cell_key(info_panel, bg, r, 0, "eth0 IP")
+        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=340)
+        self._grid_cell_key(info_panel, bg, r, 2, "eth0")
+        self._info_eth0_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
+        r += 1
+        self._grid_cell_key(info_panel, bg, r, 0, "State")
+        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
 
         meters_panel = self._status_section(parent, "")
         self._prepare_status_grid(meters_panel)
@@ -519,6 +556,7 @@ class PenKioskApp:
         ip, connected = _plotter_eth_status()
         self._eth0_connected = connected
         self._current_ip_var.set(ip)
+        self._host_ip_var.set(_host_ipv4s_for_display())
         ok_fg, bad_fg = self._INFO_FG_OK, self._INFO_FG_BAD
         self._set_key_value_cell(
             self._info_eth0_label,
