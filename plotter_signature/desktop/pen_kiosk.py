@@ -149,6 +149,9 @@ class PenKioskApp:
         self._switch_knob: int | None = None
 
         self._build_ui()
+        self._root.after(0, self._apply_kiosk_window_mode)
+        self._root.after(250, self._apply_kiosk_window_mode)
+        self._root.after(1000, self._apply_kiosk_window_mode)
 
     def _setup_kiosk_window(self) -> None:
         self._apply_kiosk_window_mode()
@@ -170,11 +173,28 @@ class PenKioskApp:
         ):
             root.bind_all(seq, self._block_kiosk_exit, add="+")
 
+    def _screen_size(self) -> tuple[int, int]:
+        self._root.update_idletasks()
+        width = int(self._root.winfo_screenwidth() or 0)
+        height = int(self._root.winfo_screenheight() or 0)
+        if width < 320 or height < 240:
+            return 1920, 1080
+        return width, height
+
     def _apply_kiosk_window_mode(self) -> None:
         root = self._root
+        width, height = self._screen_size()
         try:
             if root.state() == "iconic":
                 root.deiconify()
+        except Exception:
+            pass
+        try:
+            root.attributes("-fullscreen", True)
+        except Exception:
+            pass
+        try:
+            root.geometry(f"{width}x{height}+0+0")
         except Exception:
             pass
         if self._strict_kiosk:
@@ -187,7 +207,6 @@ class PenKioskApp:
             except Exception:
                 pass
         try:
-            root.attributes("-fullscreen", True)
             root.attributes("-topmost", True)
         except Exception:
             pass

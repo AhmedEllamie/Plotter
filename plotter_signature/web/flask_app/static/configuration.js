@@ -202,12 +202,12 @@ function hydrateConfiguration() {
   document.getElementById("apiKey").value = String(connection.apiKey || "");
 
   const print = loadPrintSettings();
-  document.getElementById("width").value = print.width || "210mm";
-  document.getElementById("height").value = print.height || "297mm";
-  document.getElementById("xPosition").value = print.xPosition || "50mm";
-  document.getElementById("yPosition").value = print.yPosition || "50mm";
-  document.getElementById("scale").value = print.scale || 1;
-  document.getElementById("rotation").value = print.rotation || 0;
+  document.getElementById("width").value = print.width || "";
+  document.getElementById("height").value = print.height || "";
+  document.getElementById("xPosition").value = print.xPosition || "";
+  document.getElementById("yPosition").value = print.yPosition || "";
+  document.getElementById("scale").value = Number.isFinite(Number(print.scale)) ? Number(print.scale) : 1;
+  document.getElementById("rotation").value = Number.isFinite(Number(print.rotation)) ? Number(print.rotation) : 0;
   document.getElementById("invertX").checked = Boolean(print.invertX);
   document.getElementById("invertY").checked = Boolean(print.invertY);
   document.getElementById("penMode").value = print.penMode === "finish" ? "finish" : "start";
@@ -232,6 +232,7 @@ function hydrateConfiguration() {
 
 function persistConnectionSettings() {
   saveConnectionSettings(readConnectionForm());
+  queueServerUiProfileSave();
 }
 
 function setApiKey() {
@@ -273,6 +274,7 @@ function persistCaptureSettings() {
 function buildServerUiProfilePayload() {
   const print = readPrintSettingsForm();
   const capture = readCaptureSettingsForm();
+  const connection = readConnectionForm();
   const cachedQuadPointsPx = Array.isArray(uiState.lastAppliedQuadPointsPx)
     ? uiState.lastAppliedQuadPointsPx.map((point) => [Number(point[0]), Number(point[1])])
     : [];
@@ -280,21 +282,27 @@ function buildServerUiProfilePayload() {
   const quadPointsPx = Array.isArray(cachedQuadPointsPx) && cachedQuadPointsPx.length === REQUIRED_QUAD_POINTS
     ? cachedQuadPointsPx
     : (Array.isArray(computedQuadPointsPx) ? computedQuadPointsPx : []);
+  const printPayload = {
+    width: String(print.width || "").trim(),
+    height: String(print.height || "").trim(),
+    xPosition: String(print.xPosition || "").trim(),
+    yPosition: String(print.yPosition || "").trim(),
+    scale: Number(print.scale || 1),
+    rotation: Number(print.rotation || 0),
+    invertX: Boolean(print.invertX),
+    invertY: Boolean(print.invertY),
+  };
   return {
-    print: {
-      width: String(print.width || "").trim(),
-      height: String(print.height || "").trim(),
-      xPosition: String(print.xPosition || "").trim(),
-      yPosition: String(print.yPosition || "").trim(),
-      scale: Number(print.scale || 1),
-      rotation: Number(print.rotation || 0),
-      invertX: Boolean(print.invertX),
-      invertY: Boolean(print.invertY),
-    },
+    printRequestJson: { printRequest: printPayload },
+    print: printPayload,
     capture: {
       autofocus_enabled: Boolean(capture.autofocusEnabled),
       manual_focus_value: Number(capture.manualFocusValue || 35),
       quad_points: quadPointsPx,
+    },
+    connection: {
+      comPort: String(connection.comPort || "").trim(),
+      baudRate: FIXED_BAUD_RATE,
     },
   };
 }
@@ -303,8 +311,12 @@ function applyServerUiProfile(profile) {
   if (!profile || typeof profile !== "object") {
     return;
   }
-  const print = typeof profile.print === "object" && profile.print !== null ? profile.print : {};
-  const capture = typeof profile.capture === "object" && profile.capture !== null ? profile.capture : {};
+  applyServerProfileToLocalStorage(profile);
+  const print = printBlockFromServerProfile(profile);
+  const capture = captureBlockFromServerProfile(profile);
+  const connection = typeof profile.connection === "object" && profile.connection !== null
+    ? profile.connection
+    : {};
 
   if (typeof print.width === "string") document.getElementById("width").value = print.width;
   if (typeof print.height === "string") document.getElementById("height").value = print.height;
@@ -315,19 +327,19 @@ function applyServerUiProfile(profile) {
   if (typeof print.invertX !== "undefined") document.getElementById("invertX").checked = Boolean(print.invertX);
   if (typeof print.invertY !== "undefined") document.getElementById("invertY").checked = Boolean(print.invertY);
 
-  const autofocusEnabled = typeof capture.autofocus_enabled !== "undefined"
-    ? capture.autofocus_enabled
-    : capture.autofocusEnabled;
+  if (typeof connection.comPort === "string" && connection.comPort.trim()) {
+    document.getElementById("comPort").value = connection.comPort.trim();
+  }
+
+  const autofocusEnabled = capture.autofocusEnabled;
   if (typeof autofocusEnabled !== "undefined") {
     setAutofocusEnabled(Boolean(autofocusEnabled));
   }
-  const manualFocusValue = Number.isFinite(Number(capture.manual_focus_value))
-    ? capture.manual_focus_value
-    : capture.manualFocusValue;
+  const manualFocusValue = capture.manualFocusValue;
   if (Number.isFinite(Number(manualFocusValue))) {
     document.getElementById("manualFocusValue").value = clamp(Number(manualFocusValue), MIN_FOCUS_VALUE, MAX_FOCUS_VALUE);
   }
-  const quadPointsPx = Array.isArray(capture.quad_points) ? capture.quad_points : [];
+  const quadPointsPx = Array.isArray(capture.quadPoints) ? capture.quadPoints : [];
   if (quadPointsPx.length === REQUIRED_QUAD_POINTS) {
     uiState.lastAppliedQuadPointsPx = quadPointsPx
       .filter((point) => Array.isArray(point) && point.length === 2)
@@ -335,8 +347,6 @@ function applyServerUiProfile(profile) {
       .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
   }
 
-  persistPrintSettings();
-  persistCaptureSettings();
   renderFocusLabel();
   renderFocusMode();
   renderQuadPoints();
@@ -834,16 +844,17 @@ function registerActions() {
 }
 
 async function initConfigurationPage() {
-  hydrateConfiguration();
-  try {
-    await loadServerUiProfile();
-    appendConfigLog("Loaded configuration profile from server.");
-  } catch (error) {
-    appendConfigLog(`Server profile load failed, using local settings: ${error.message}`, true);
-  }
   registerPersistenceListeners();
   registerActions();
-  showConfigMessage("Settings are saved automatically in this browser.");
+  try {
+    await loadServerUiProfile();
+    appendConfigLog("Loaded configuration profile from server (ui-profile.json).");
+    showConfigMessage("Settings loaded from server profile. Configure once, then use Send scanner config.");
+  } catch (error) {
+    hydrateConfiguration();
+    appendConfigLog(`Server profile load failed, using local cache: ${error.message}`, true);
+    showConfigMessage("Could not load server profile. Check API key and server.", true);
+  }
   appendConfigLog("Configuration page initialized.");
 }
 

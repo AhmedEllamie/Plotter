@@ -1,10 +1,10 @@
 const STORAGE_KEY = "automatedSignature.v1";
 
 const DEFAULT_PRINT_SETTINGS = {
-  width: "210mm",
-  height: "297mm",
-  xPosition: "50mm",
-  yPosition: "50mm",
+  width: "",
+  height: "",
+  xPosition: "",
+  yPosition: "",
   scale: 1,
   rotation: 0,
   invertX: false,
@@ -148,4 +148,59 @@ function saveCaptureSettings(captureSettings) {
   state.capture = { ...DEFAULT_CAPTURE_SETTINGS, ...captureSettings };
   writeStorageState(state);
   return state.capture;
+}
+
+function printBlockFromServerProfile(profile) {
+  if (!profile || typeof profile !== "object") {
+    return {};
+  }
+  const nested = profile.printRequestJson?.printRequest;
+  if (typeof nested === "object" && nested !== null) {
+    return nested;
+  }
+  if (typeof profile.print === "object" && profile.print !== null) {
+    return profile.print;
+  }
+  return {};
+}
+
+function captureBlockFromServerProfile(profile) {
+  if (!profile || typeof profile.capture !== "object" || profile.capture === null) {
+    return {};
+  }
+  const capture = profile.capture;
+  const quadPoints = Array.isArray(capture.quad_points) ? capture.quad_points : capture.quadPoints;
+  return {
+    autofocusEnabled: capture.autofocus_enabled ?? capture.autofocusEnabled,
+    manualFocusValue: capture.manual_focus_value ?? capture.manualFocusValue,
+    quadPoints: Array.isArray(quadPoints) ? quadPoints : [],
+    streamFisheye: capture.streamFisheye,
+  };
+}
+
+function applyServerProfileToLocalStorage(profile) {
+  if (!profile || typeof profile !== "object") {
+    return;
+  }
+  const state = readStorageState();
+  state.print = { ...DEFAULT_PRINT_SETTINGS, ...printBlockFromServerProfile(profile) };
+  const captureBlock = captureBlockFromServerProfile(profile);
+  state.capture = {
+    ...DEFAULT_CAPTURE_SETTINGS,
+    ...captureBlock,
+    streamFisheye:
+      typeof captureBlock.streamFisheye === "boolean"
+        ? captureBlock.streamFisheye
+        : state.capture.streamFisheye,
+  };
+  if (typeof profile.connection === "object" && profile.connection !== null) {
+    state.connection = { ...DEFAULT_CONNECTION_SETTINGS, ...profile.connection };
+  }
+  writeStorageState(state);
+}
+
+async function fetchAndApplyServerProfile() {
+  const profile = await apiGet("/api/config/ui-profile");
+  applyServerProfileToLocalStorage(profile);
+  return profile;
 }

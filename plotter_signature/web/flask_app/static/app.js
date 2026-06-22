@@ -463,6 +463,12 @@ async function initPage() {
   updateCaptureFullscreenButtonLabel();
   updateBulkProgressLabel();
   updateBulkUiState();
+  try {
+    await fetchAndApplyServerProfile();
+    appendLog("Print settings loaded from server profile.");
+  } catch (error) {
+    appendLog(`Server profile load: ${error.message}`, true);
+  }
   await refreshStatus();
   startAutoStatusRefresh();
   try {

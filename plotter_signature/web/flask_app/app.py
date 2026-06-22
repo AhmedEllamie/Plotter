@@ -398,33 +398,79 @@ def _default_ui_profile_path() -> Path:
     return Path.home() / ".plotter-signature" / "ui-profile.json"
 
 
-def _default_ui_profile_data() -> dict[str, Any]:
+def _empty_print_block() -> dict[str, Any]:
     return {
-        "print": {
-            "width": "210mm",
-            "height": "297mm",
-            "xPosition": "50mm",
-            "yPosition": "50mm",
-            "scale": 1,
-            "rotation": 0,
-            "invertX": False,
-            "invertY": True,
-        },
+        "width": "",
+        "height": "",
+        "xPosition": "",
+        "yPosition": "",
+        "scale": 1,
+        "rotation": 0,
+        "invertX": False,
+        "invertY": True,
+    }
+
+
+def _empty_ui_profile_data() -> dict[str, Any]:
+    print_block = _empty_print_block()
+    return {
+        "printRequestJson": {"printRequest": dict(print_block)},
+        "print": print_block,
         "capture": {
             "autofocus_enabled": False,
             "manual_focus_value": 35,
             "quad_points": [],
         },
+        "connection": {
+            "comPort": "",
+            "baudRate": 250000,
+        },
         "updatedAt": None,
     }
 
 
-def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
-    defaults = _default_ui_profile_data()
+def _default_ui_profile_data() -> dict[str, Any]:
+    """Runtime fallback when the profile file is missing or unreadable."""
+    return _empty_ui_profile_data()
+
+
+def _print_block_from_profile(payload: dict[str, Any]) -> dict[str, Any]:
+    print_request_json = payload.get("printRequestJson")
+    if isinstance(print_request_json, dict):
+        nested = print_request_json.get("printRequest")
+        if isinstance(nested, dict):
+            return dict(nested)
     print_payload = payload.get("print")
+    if isinstance(print_payload, dict):
+        return dict(print_payload)
+    return {}
+
+
+def _sync_profile_print_request_json(profile: dict[str, Any]) -> dict[str, Any]:
+    print_block = profile.get("print")
+    if isinstance(print_block, dict):
+        profile["printRequestJson"] = {"printRequest": dict(print_block)}
+    return profile
+
+
+def _ensure_ui_profile_file(file_path: Path) -> None:
+    if file_path.exists():
+        return
+    template = _empty_ui_profile_data()
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
+    defaults = _empty_ui_profile_data()
+    print_payload = _print_block_from_profile(payload)
+    if not print_payload and isinstance(payload.get("print"), dict):
+        print_payload = payload.get("print") or {}
     capture_payload = payload.get("capture")
+    connection_payload = payload.get("connection")
     print_data = dict(defaults["print"])
     capture_data = dict(defaults["capture"])
+    connection_data = dict(defaults["connection"])
 
     if isinstance(print_payload, dict):
         paper_value = print_payload.get("paper") or print_payload.get("Paper")
@@ -486,11 +532,24 @@ def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
                 sanitized_points.append([x_value, y_value])
         capture_data["quad_points"] = sanitized_points[:4]
 
-    return {
+    if isinstance(connection_payload, dict):
+        com_port = connection_payload.get("comPort")
+        if isinstance(com_port, str):
+            connection_data["comPort"] = com_port.strip()
+        baud_rate = connection_payload.get("baudRate")
+        if baud_rate is not None and baud_rate != "":
+            try:
+                connection_data["baudRate"] = int(float(baud_rate))
+            except (TypeError, ValueError):
+                pass
+
+    profile = {
         "print": print_data,
         "capture": capture_data,
+        "connection": connection_data,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
+    return _sync_profile_print_request_json(profile)
 
 
 def _load_ui_profile_data(file_path: Path) -> dict[str, Any]:
@@ -526,14 +585,14 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     last_scanner_manual_config: dict[str, Any] = {}
     ui_profile_lock = threading.Lock()
     ui_profile_path = _default_ui_profile_path()
+    _ensure_ui_profile_file(ui_profile_path)
     ui_profile_exists = ui_profile_path.exists()
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
     _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
 
     def _resolve_print_request_payload() -> tuple[dict[str, Any], dict[str, Any]]:
         with ui_profile_lock:
-            profile_block = ui_profile_data.get("print")
-        profile = dict(profile_block) if isinstance(profile_block, dict) else {}
+            profile = _print_block_from_profile(ui_profile_data)
         request_fields = _filter_print_request_fields(_extract_print_payload())
         resolved = _merge_print_request_payload(profile, request_fields)
         return resolved, request_fields
@@ -837,8 +896,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return manual_config_response
 
     def _bootstrap_scanner_config_from_profile() -> None:
-        if not ui_profile_exists:
-            return
         capture_profile = ui_profile_data.get("capture")
         if not isinstance(capture_profile, dict):
             return
