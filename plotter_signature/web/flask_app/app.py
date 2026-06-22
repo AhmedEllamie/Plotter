@@ -546,6 +546,8 @@ def _sanitize_ui_profile_data(
         if not has_layout:
             raise ValueError("Print layout must be configured before initialization.")
         initialized = True
+    elif "initialized" in payload:
+        initialized = bool(payload.get("initialized"))
     else:
         initialized = bool(current_initialized)
 
@@ -576,7 +578,10 @@ def _load_ui_profile_data(file_path: Path) -> dict[str, Any]:
         return defaults
     if not isinstance(payload, dict):
         return defaults
-    return _sanitize_ui_profile_data(payload)
+    return _sanitize_ui_profile_data(
+        payload,
+        current_initialized=bool(payload.get("initialized")),
+    )
 
 
 def _save_ui_profile_data(
@@ -1475,7 +1480,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             ),
         )
 
-    @app.get("/api/cmd/jobs/queue")
+    @app.route("/api/cmd/jobs/queue", methods=["GET"])
     def command_jobs_queue() -> tuple[Response, int]:
         active_row: dict[str, Any] | None = None
         pending_rows: list[dict[str, Any]] = []
@@ -1495,7 +1500,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             data={"active": active_row, "pending": pending_rows},
         )
 
-    @app.get("/api/cmd/jobs/<string:job_id>")
+    @app.route("/api/cmd/jobs/<string:job_id>", methods=["GET"])
     def command_job_status(job_id: str) -> tuple[Response, int]:
         job_id = job_id.strip()
         if not job_id:

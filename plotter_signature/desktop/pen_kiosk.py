@@ -58,7 +58,15 @@ def _job_queue_label(job: dict[str, object]) -> str:
         title = "Void"
     else:
         title = "Print"
-    status = str(job.get("status") or "unknown")
+    db_status = str(job.get("status") or "")
+    if db_status in ("started", "running"):
+        status = "running"
+    elif db_status in ("queued", "pending"):
+        status = "pending"
+    elif db_status == "finished":
+        status = str(job.get("outcome") or "finished")
+    else:
+        status = db_status or "unknown"
     return f"{title} — {status}"
 
 
@@ -240,8 +248,12 @@ class PenKioskApp:
         errors_panel = self._status_section(parent, "")
         errors_panel.grid_columnconfigure(0, weight=0)
         errors_panel.grid_columnconfigure(1, weight=1)
+        errors_panel.grid_columnconfigure(2, weight=0)
+        errors_panel.grid_columnconfigure(3, weight=1)
         self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
-        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1, columnspan=3)
+        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
+        self._grid_cell_key(errors_panel, bg, 0, 2, "Queue")
+        self._grid_cell_value_var(errors_panel, bg, 0, 3, self._queue_lines_var, wraplength=420)
         self._grid_cell_key(errors_panel, bg, 1, 0, "Error message")
         self._api_feedback_message_label = self._grid_cell_value_plain(
             errors_panel,
@@ -250,15 +262,9 @@ class PenKioskApp:
             1,
             font=("Segoe UI", 12),
             initial_fg="#64748b",
-            wraplength=900,
-            columnspan=3,
+            wraplength=420,
+            columnspan=1,
         )
-
-        queue_panel = self._status_section(parent, "")
-        queue_panel.grid_columnconfigure(0, weight=0)
-        queue_panel.grid_columnconfigure(1, weight=1)
-        self._grid_cell_key(queue_panel, bg, 0, 0, "Queue")
-        self._grid_cell_value_var(queue_panel, bg, 0, 1, self._queue_lines_var, wraplength=900)
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
@@ -486,6 +492,14 @@ class PenKioskApp:
     def _refresh_job_queue_now(self) -> None:
         try:
             queue_data = self._api_get("/api/cmd/jobs/queue")
+        except HTTPError as ex:
+            if ex.code == 404:
+                self._queue_lines_var.set("Queue API missing (update server)")
+            elif ex.code == 405:
+                self._queue_lines_var.set("Queue API: use GET (update server)")
+            else:
+                self._queue_lines_var.set(f"Queue HTTP {ex.code}")
+            return
         except Exception:
             self._queue_lines_var.set("Queue unavailable")
             return
@@ -553,7 +567,6 @@ class PenKioskApp:
                 self._append_feedback(str(lm), is_error=True, error_code=code_str)
             else:
                 self._clear_error_panel()
-            self._refresh_job_queue_now()
         except HTTPError as ex:
             self._http_ok = False
             bad_fg, muted_fg = self._INFO_FG_BAD, self._INFO_FG_MUTED
@@ -573,6 +586,8 @@ class PenKioskApp:
             self._set_key_value_cell(self._info_server_label, "error", bad_fg)
             self._set_key_value_cell(self._info_state_label, "—", muted_fg)
             self._append_feedback(f"Status error: {ex}", is_error=True)
+        finally:
+            self._refresh_job_queue_now()
 
     @staticmethod
     def _decode_http_error(ex: HTTPError) -> tuple[str | None, str]:

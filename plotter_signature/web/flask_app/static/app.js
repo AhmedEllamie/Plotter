@@ -4,6 +4,7 @@ const state = {
   capturePollHandle: null,
   statusPollHandle: null,
   jobPollHandle: null,
+  queuePollHandle: null,
   lastBulkCopies: 1,
   bulkRunning: false,
   bulkStopRequested: false,
@@ -83,9 +84,18 @@ function renderErrorPanel(status) {
   }
 }
 
-function renderQueuePanel(queueData) {
+function renderQueuePanel(queueData, errorMessage = "") {
   const container = document.getElementById("jobQueueList");
   if (!container) return;
+
+  container.innerHTML = "";
+  if (errorMessage) {
+    const err = document.createElement("div");
+    err.className = "job-queue-empty finished-bad";
+    err.textContent = errorMessage;
+    container.appendChild(err);
+    return;
+  }
 
   const items = [];
   if (queueData?.active) {
@@ -97,7 +107,6 @@ function renderQueuePanel(queueData) {
     }
   }
 
-  container.innerHTML = "";
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "job-queue-empty muted";
@@ -150,13 +159,39 @@ function syncBulkStateFromQueue(queueData) {
   updatePrintCaptureUiState();
 }
 
+function queueHasOpenJobs(queueData) {
+  return Boolean(queueData?.active) || (Array.isArray(queueData?.pending) && queueData.pending.length > 0);
+}
+
 async function refreshJobQueue() {
   try {
     const queueData = await apiGet("/api/cmd/jobs/queue");
     renderQueuePanel(queueData);
     syncBulkStateFromQueue(queueData);
+    if (queueHasOpenJobs(queueData)) {
+      ensureQueuePolling();
+    }
+    return queueData;
   } catch (error) {
-    appendLog(`Queue refresh error: ${error.message}`, true);
+    const message = String(error.message || "Queue unavailable");
+    renderQueuePanel(null, message);
+    return null;
+  }
+}
+
+function ensureQueuePolling(intervalMs = 1500) {
+  if (state.queuePollHandle) return;
+  state.queuePollHandle = setInterval(() => {
+    void refreshJobQueue();
+  }, intervalMs);
+}
+
+function stopQueuePollingIfIdle(queueData) {
+  if (queueHasOpenJobs(queueData)) return;
+  if (state.trackedJobs.size > 0) return;
+  if (state.queuePollHandle) {
+    clearInterval(state.queuePollHandle);
+    state.queuePollHandle = null;
   }
 }
 
@@ -189,13 +224,15 @@ async function pollTrackedJobs() {
   }
 
   untrackFinishedJobs();
-  await refreshJobQueue();
+  const queueData = await refreshJobQueue();
 
-  const stillActive = [...state.trackedJobs.values()].some((job) => job.status !== "finished");
-  if (!stillActive && state.jobPollHandle) {
+  const stillTracked = [...state.trackedJobs.values()].some((job) => job.status !== "finished");
+  const stillQueued = queueHasOpenJobs(queueData);
+  if (!stillTracked && !stillQueued && state.jobPollHandle) {
     clearInterval(state.jobPollHandle);
     state.jobPollHandle = null;
   }
+  stopQueuePollingIfIdle(queueData);
 }
 
 function ensureJobPolling(intervalMs = 1500) {
@@ -360,6 +397,8 @@ async function refreshStatus(options = {}) {
     if (!silent) {
       appendLog(`Status error: ${error.message}`, true);
     }
+  } finally {
+    await refreshJobQueue();
   }
 }
 
@@ -370,8 +409,8 @@ function startAutoStatusRefresh(intervalMs = 3000) {
   }
   state.statusPollHandle = setInterval(() => {
     void refreshStatus({ silent: true });
-    void refreshJobQueue();
   }, intervalMs);
+  ensureQueuePolling(intervalMs);
 }
 
 function clearSelectedSvgUi() {

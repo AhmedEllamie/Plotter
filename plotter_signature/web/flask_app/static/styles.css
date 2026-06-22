@@ -435,6 +435,10 @@ label.radio-inline {
   font-size: 14px;
 }
 
+.job-queue-empty.finished-bad {
+  color: #b42318;
+}
+
 .muted {
   color: #64748b;
 }
