@@ -102,16 +102,18 @@ JSON or form: `resetCumulative` (boolean, default false), and/or `meters` (numbe
 
 ## `GET /api/config/ui-profile` / `POST /api/config/ui-profile`
 ### Description
-Load or save the configuration UI profile (`print` + `capture` sections, and `updatedAt` on read/save).
+Load or save the system configuration profile (`initialized`, `printRequestJson`, `print`, `capture`, `updatedAt`).
 ### How to use
 - **GET:** no body.
-- **POST:** JSON body must be the profile object with **top-level** `capture` and `print` — the same shape as **`data`** from GET, **not** wrapped in `{ "success", "data", ... }`. Nesting only under `data` causes `capture`/`print` to be ignored and defaults to apply (e.g. empty `quad_points`).
+- **POST:** JSON profile object. Draft saves update `capture` / print fields without changing `initialized`.
+- **POST with `initialize: true`:** validates config, applies scanner session, sets `initialized: true` (Send scanner config).
 ### What it takes
 - Requires `X-API-Key`.
 ### Response
-- Full profile; POST may add **`scannerApplyWarning`** if scanner apply fails after save.
+- Full profile; initialize may add **`scannerApplyWarning`** if scanner apply fails.
 ### Error codes
 - `UI_PROFILE_REQUIRED` (400)
+- `PRINT_VALIDATION_ERROR` (400) — invalid config on initialize
 - `UI_PROFILE_SAVE_FAILED` (500)
 
 ## `GET /api/config/scanner/stream.mjpg`
@@ -131,28 +133,16 @@ Set optional query (`fps`, `width`, `fisheye`) and bind image source.
 
 ## Scanner manual config
 ### Description
-`POST /api/config/scanner/manual-config` applies scanner session config (focus mode + optional quad points). The same capture fields can be saved via `POST /api/config/ui-profile` under the `capture` section (`autofocus_enabled`, `manual_focus_value`, `quad_points`).
-### How to use
-Send autofocus/manual focus (and optional quad points) to **`POST /api/config/scanner/manual-config`**, or persist them in the UI profile.
-### What it takes
-- JSON payload required.
-- Requires `X-API-Key`.
-### Response
-- Scanner config apply result.
-### Error codes
-- `SCANNER_CONFIG_REQUIRED` (400)
-- `SCANNER_HTTP_ERROR` (502)
-- `SCANNER_UNREACHABLE` (502)
-- `SCANNER_CONFIG_FAILED` (500)
+Capture settings are stored in the system profile `capture` section. Scanner session apply runs when `POST /api/config/ui-profile` is called with `initialize: true`.
 
 ## `POST /api/config/scanner/capture/oneshot`
 ### Description
-Primary one-call capture API used by the Capture button.
+Primary one-call capture API used by the Capture button. Reads capture settings from the system profile file.
 ### How to use
-Send one request to perform full scanner capture sequence and get final result metadata (same fields as `GET /api/config/capture/latest`, including optional inline image).
+Send empty JSON `{}` or no body after profile is initialized.
 ### What it takes
-- JSON payload required by manual capture flow (quad points/config payload).
-- Optional `includeDataUri` (boolean, default **true** for this route): when true, response includes `dataUri` (`data:{contentType};base64,...`) so clients can show the image without a follow-up `GET` to `.../capture/latest/image`.
+- Empty body (optional `includeDataUri` via query or as sole JSON key).
+- Requires `initialized: true` in profile.
 - Requires `X-API-Key`.
 ### Response
 - Final capture payload including:
@@ -164,7 +154,8 @@ Send one request to perform full scanner capture sequence and get final result m
   - `imageUrl`
   - `includeDataUri` true: `dataUri` for direct use as an `<img src>`.
 ### Error codes
-- `SCANNER_CONFIG_REQUIRED` (400)
+- `CONFIG_NOT_INITIALIZED` (409)
+- `CAPTURE_SETTINGS_NOT_ALLOWED` (400)
 - `SCANNER_HTTP_ERROR` (502)
 - `SCANNER_UNREACHABLE` (502)
 - `SCANNER_CAPTURE_FAILED` (500)

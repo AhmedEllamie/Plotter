@@ -8,6 +8,7 @@ const state = {
   bulkStopRequested: false,
   bulkRequestedTotal: 0,
   bulkPrintedCount: 0,
+  systemInitialized: false,
 };
 
 function appendLog(message, isError = false) {
@@ -29,18 +30,28 @@ function clampPercent(value) {
   return Math.max(0, Math.min(100, asNumber));
 }
 
-function buildPrintSettingsPayload() {
-  const settings = loadPrintSettings();
-  return {
-    width: settings.width,
-    height: settings.height,
-    xPosition: settings.xPosition,
-    yPosition: settings.yPosition,
-    scale: Number(settings.scale || 1),
-    rotation: Number(settings.rotation || 0),
-    invertX: Boolean(settings.invertX),
-    invertY: Boolean(settings.invertY),
-  };
+function updatePrintCaptureUiState() {
+  const disabled = !state.systemInitialized || state.bulkRunning;
+  const printBtn = document.getElementById("printBtn");
+  const bulkPrintBtn = document.getElementById("bulkPrintBtn");
+  const captureBtn = document.getElementById("captureBtn");
+  if (printBtn) printBtn.disabled = !state.systemInitialized;
+  if (bulkPrintBtn) bulkPrintBtn.disabled = disabled;
+  if (captureBtn) captureBtn.disabled = !state.systemInitialized;
+}
+
+async function refreshSystemInitStatus() {
+  try {
+    const profile = await apiGet("/api/config/ui-profile");
+    state.systemInitialized = Boolean(profile.initialized);
+    if (!state.systemInitialized) {
+      appendLog("System not initialized. Configure on /configuration and press Send scanner config.", true);
+    }
+  } catch (error) {
+    state.systemInitialized = false;
+    appendLog(`Could not load system configuration status: ${error.message}`, true);
+  }
+  updatePrintCaptureUiState();
 }
 
 function parseQuadPoints(points) {
@@ -234,13 +245,16 @@ function logPrintResponse(data, label) {
 }
 
 async function printUploadedSvg() {
+  if (!state.systemInitialized) {
+    appendLog("Print blocked: system not initialized. Use /configuration and Send scanner config.", true);
+    return;
+  }
   if (!state.lastSvgFile) {
     appendLog("Choose an SVG file first (Choose SVG). Each print sends the file with the request.", true);
     return;
   }
   const formData = new FormData();
   formData.append("svg", state.lastSvgFile);
-  formData.append("printRequestJson", JSON.stringify({ printRequest: buildPrintSettingsPayload() }));
   try {
     const startedAt = new Date();
     appendLog(`Print started at ${formatTimestamp(startedAt)}.`);
@@ -259,6 +273,10 @@ async function printUploadedSvg() {
 }
 
 async function bulkPrintUploadedSvg() {
+  if (!state.systemInitialized) {
+    appendLog("Bulk print blocked: system not initialized. Use /configuration and Send scanner config.", true);
+    return;
+  }
   if (state.bulkRunning) {
     appendLog("Bulk print is already running.", true);
     return;
@@ -291,7 +309,6 @@ async function bulkPrintUploadedSvg() {
   const formData = new FormData();
   formData.append("svg", state.lastSvgFile);
   formData.append("copies", String(copies));
-  formData.append("printRequestJson", JSON.stringify({ printRequest: buildPrintSettingsPayload() }));
 
   try {
     appendLog(`Bulk print started (${copies} copies, one server job).`);
@@ -411,11 +428,10 @@ async function toggleCaptureFullscreen() {
 }
 
 async function requestCaptureAndThrow() {
-  const capture = loadCaptureSettings();
-  const data = await apiPostJson("/api/config/scanner/capture/oneshot", {
-    autofocus_enabled: Boolean(capture.autofocusEnabled),
-    manual_focus_value: Number(capture.manualFocusValue || 35),
-  });
+  if (!state.systemInitialized) {
+    throw new Error("System not initialized. Configure on /configuration and press Send scanner config.");
+  }
+  const data = await apiPostJson("/api/config/scanner/capture/oneshot", {});
   const imageEl = document.getElementById("capturePreview");
   if (data.dataUri) {
     imageEl.src = String(data.dataUri);
@@ -463,6 +479,7 @@ async function initPage() {
   updateCaptureFullscreenButtonLabel();
   updateBulkProgressLabel();
   updateBulkUiState();
+  await refreshSystemInitStatus();
   await refreshStatus();
   startAutoStatusRefresh();
   try {

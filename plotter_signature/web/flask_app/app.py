@@ -370,6 +370,74 @@ def _scanner_request_bytes(scanner_settings: ScannerServiceSettings, path: str) 
         )
 
 
+_CAPTURE_BODY_KEYS = frozenset(
+    {
+        "autofocus_enabled",
+        "autofocusEnabled",
+        "manual_focus_value",
+        "manualFocusValue",
+        "quad_points",
+        "quadPoints",
+    }
+)
+
+
+def _request_contains_print_settings() -> bool:
+    json_payload = _get_json_dict()
+    if json_payload:
+        nested = json_payload.get("printRequest")
+        if isinstance(nested, dict) and nested:
+            return True
+        if any(key in json_payload for key in _PRINT_REQUEST_FIELD_KEYS):
+            return True
+    if request.form.get("printRequestJson"):
+        return True
+    if request.form:
+        form_keys = set(request.form.keys())
+        if form_keys & _PRINT_REQUEST_FIELD_KEYS:
+            return True
+    return False
+
+
+def _request_contains_capture_settings() -> bool:
+    json_payload = _get_json_dict()
+    if not json_payload:
+        return False
+    return any(key in json_payload for key in _CAPTURE_BODY_KEYS)
+
+
+def _empty_print_block() -> dict[str, Any]:
+    return {
+        "width": "",
+        "height": "",
+        "xPosition": "",
+        "yPosition": "",
+        "scale": 1,
+        "rotation": 0,
+        "invertX": False,
+        "invertY": True,
+    }
+
+
+def _print_block_from_profile(payload: dict[str, Any]) -> dict[str, Any]:
+    print_request_json = payload.get("printRequestJson")
+    if isinstance(print_request_json, dict):
+        nested = print_request_json.get("printRequest")
+        if isinstance(nested, dict):
+            return dict(nested)
+    print_payload = payload.get("print")
+    if isinstance(print_payload, dict):
+        return dict(print_payload)
+    return {}
+
+
+def _sync_profile_print_request_json(profile: dict[str, Any]) -> dict[str, Any]:
+    print_block = profile.get("print")
+    if isinstance(print_block, dict):
+        profile["printRequestJson"] = {"printRequest": dict(print_block)}
+    return profile
+
+
 def _default_ui_profile_path() -> Path:
     override = (os.getenv("PLOTTER_UI_PROFILE_PATH") or "").strip()
     if override:
@@ -381,17 +449,11 @@ def _default_ui_profile_path() -> Path:
 
 
 def _default_ui_profile_data() -> dict[str, Any]:
+    print_block = _empty_print_block()
     return {
-        "print": {
-            "width": "210mm",
-            "height": "297mm",
-            "xPosition": "50mm",
-            "yPosition": "50mm",
-            "scale": 1,
-            "rotation": 0,
-            "invertX": False,
-            "invertY": True,
-        },
+        "initialized": False,
+        "printRequestJson": {"printRequest": dict(print_block)},
+        "print": dict(print_block),
         "capture": {
             "autofocus_enabled": False,
             "manual_focus_value": 35,
@@ -401,9 +463,16 @@ def _default_ui_profile_data() -> dict[str, Any]:
     }
 
 
-def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_ui_profile_data(
+    payload: dict[str, Any],
+    *,
+    initialize: bool = False,
+    current_initialized: bool = False,
+) -> dict[str, Any]:
     defaults = _default_ui_profile_data()
-    print_payload = payload.get("print")
+    print_payload = _print_block_from_profile(payload)
+    if not print_payload and isinstance(payload.get("print"), dict):
+        print_payload = payload.get("print") or {}
     capture_payload = payload.get("capture")
     print_data = dict(defaults["print"])
     capture_data = dict(defaults["capture"])
@@ -411,7 +480,7 @@ def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(print_payload, dict):
         for key in ("width", "height", "xPosition", "yPosition"):
             value = print_payload.get(key)
-            if isinstance(value, str) and value.strip():
+            if isinstance(value, str):
                 print_data[key] = value.strip()
         for key in ("scale", "rotation"):
             raw_value = print_payload.get(key)
@@ -463,11 +532,35 @@ def _sanitize_ui_profile_data(payload: dict[str, Any]) -> dict[str, Any]:
                 sanitized_points.append([x_value, y_value])
         capture_data["quad_points"] = sanitized_points[:4]
 
-    return {
+    if initialize:
+        if len(capture_data["quad_points"]) != 4:
+            raise ValueError("Four quad_points are required before initialization.")
+        print_request = _build_print_request(print_data)
+        has_layout = print_request.paper is not None or any(
+            _is_meaningful_print_value(print_data.get(key))
+            for key in ("width", "height", "xPosition", "yPosition")
+        )
+        if not has_layout:
+            raise ValueError("Print layout must be configured before initialization.")
+        initialized = True
+    else:
+        initialized = bool(current_initialized)
+
+    profile = {
+        "initialized": initialized,
         "print": print_data,
         "capture": capture_data,
         "updatedAt": datetime.now(timezone.utc).isoformat(),
     }
+    return _sync_profile_print_request_json(profile)
+
+
+def _ensure_ui_profile_file(file_path: Path) -> None:
+    if file_path.exists():
+        return
+    template = _default_ui_profile_data()
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(json.dumps(template, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
 def _load_ui_profile_data(file_path: Path) -> dict[str, Any]:
@@ -483,8 +576,18 @@ def _load_ui_profile_data(file_path: Path) -> dict[str, Any]:
     return _sanitize_ui_profile_data(payload)
 
 
-def _save_ui_profile_data(file_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    sanitized = _sanitize_ui_profile_data(payload)
+def _save_ui_profile_data(
+    file_path: Path,
+    payload: dict[str, Any],
+    *,
+    initialize: bool = False,
+    current_initialized: bool = False,
+) -> dict[str, Any]:
+    sanitized = _sanitize_ui_profile_data(
+        payload,
+        initialize=initialize,
+        current_initialized=current_initialized,
+    )
     file_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = file_path.with_suffix(f"{file_path.suffix}.tmp")
     temp_path.write_text(json.dumps(sanitized, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -503,33 +606,46 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     last_scanner_manual_config: dict[str, Any] = {}
     ui_profile_lock = threading.Lock()
     ui_profile_path = _default_ui_profile_path()
+    _ensure_ui_profile_file(ui_profile_path)
     ui_profile_exists = ui_profile_path.exists()
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
     _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
 
-    def _resolve_print_request_payload() -> dict[str, Any]:
+    def _system_config_initialized() -> bool:
         with ui_profile_lock:
-            profile_block = ui_profile_data.get("print")
-        profile = dict(profile_block) if isinstance(profile_block, dict) else {}
-        request_fields = _filter_print_request_fields(_extract_print_payload())
-        return _merge_print_request_payload(profile, request_fields)
+            return bool(ui_profile_data.get("initialized"))
+
+    def _config_not_initialized_error() -> tuple[Response, int]:
+        return api_error(
+            "System configuration is not initialized. Configure settings on /configuration and press Send scanner config.",
+            error_code="CONFIG_NOT_INITIALIZED",
+            status_code=409,
+        )
+
+    def _print_request_from_system_config() -> dict[str, Any]:
+        with ui_profile_lock:
+            profile = dict(ui_profile_data)
+        return _print_block_from_profile(profile)
+
+    def _resolve_print_request_payload() -> dict[str, Any]:
+        return _print_request_from_system_config()
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
-    # Seed scanner manual config cache from persisted profile so oneshot capture can
-    # still run even if startup bootstrap apply was skipped/failed.
-    capture_profile = ui_profile_data.get("capture")
-    if isinstance(capture_profile, dict):
-        seeded_quad_points = capture_profile.get("quad_points")
-        if isinstance(seeded_quad_points, list) and len(seeded_quad_points) == 4:
-            last_scanner_manual_config["quad_points"] = seeded_quad_points
-        if "autofocus_enabled" in capture_profile:
-            last_scanner_manual_config["autofocus_enabled"] = bool(capture_profile.get("autofocus_enabled"))
-        if "manual_focus_value" in capture_profile:
-            try:
-                last_scanner_manual_config["manual_focus_value"] = float(capture_profile.get("manual_focus_value"))
-            except (TypeError, ValueError):
-                pass
+    # Seed scanner manual config cache from persisted profile when initialized.
+    if ui_profile_data.get("initialized"):
+        capture_profile = ui_profile_data.get("capture")
+        if isinstance(capture_profile, dict):
+            seeded_quad_points = capture_profile.get("quad_points")
+            if isinstance(seeded_quad_points, list) and len(seeded_quad_points) == 4:
+                last_scanner_manual_config["quad_points"] = seeded_quad_points
+            if "autofocus_enabled" in capture_profile:
+                last_scanner_manual_config["autofocus_enabled"] = bool(capture_profile.get("autofocus_enabled"))
+            if "manual_focus_value" in capture_profile:
+                try:
+                    last_scanner_manual_config["manual_focus_value"] = float(capture_profile.get("manual_focus_value"))
+                except (TypeError, ValueError):
+                    pass
 
     pending_print_queue: queue.Queue[_QueuedPrintJob] = queue.Queue()
     pending_void_queue: queue.Queue[object] = queue.Queue()
@@ -793,7 +909,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return manual_config_response
 
     def _bootstrap_scanner_config_from_profile() -> None:
-        if not ui_profile_exists:
+        if not ui_profile_data.get("initialized"):
             return
         capture_profile = ui_profile_data.get("capture")
         if not isinstance(capture_profile, dict):
@@ -860,8 +976,18 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         payload = _get_json_dict()
         if not payload:
             return api_error("UI profile payload is required.", error_code="UI_PROFILE_REQUIRED", status_code=400)
+        initialize = parse_bool(payload.pop("initialize", False), default=False)
+        with ui_profile_lock:
+            current_initialized = bool(ui_profile_data.get("initialized"))
         try:
-            saved_profile = _save_ui_profile_data(ui_profile_path, payload)
+            saved_profile = _save_ui_profile_data(
+                ui_profile_path,
+                payload,
+                initialize=initialize,
+                current_initialized=current_initialized,
+            )
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
         except Exception as ex:
             return api_error(
                 f"Failed to save UI profile: {ex}",
@@ -884,7 +1010,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     except (TypeError, ValueError):
                         pass
 
-            if scanner_settings.is_configured and isinstance(saved_capture, dict):
+            if initialize and scanner_settings.is_configured and isinstance(saved_capture, dict):
                 session_payload, require_quad = _capture_profile_to_scanner_session_payload(saved_capture)
                 try:
                     scanner_response = _apply_scanner_session_config(session_payload, require_quad_points=require_quad)
@@ -893,12 +1019,14 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
                     _remember_scanner_manual_config(session_payload, scanner_response)
                 except Exception as ex:
                     scanner_warning = str(ex)
-                    app.logger.warning("Scanner apply after UI profile save failed: %s", ex)
+                    app.logger.warning("Scanner apply after UI profile initialization failed: %s", ex)
 
         data_out = dict(ui_profile_data)
         if scanner_warning:
             data_out["scannerApplyWarning"] = scanner_warning
         message = "UI profile saved."
+        if initialize:
+            message = "System configuration initialized."
         if scanner_warning:
             message = f"{message} Scanner apply failed: {scanner_warning}"
         return api_success(message=message, data=data_out)
@@ -1232,6 +1360,14 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
 
     @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:
+        if not _system_config_initialized():
+            return _config_not_initialized_error()
+        if _request_contains_print_settings():
+            return api_error(
+                "Print settings must come from the server configuration file. Remove printRequestJson and print fields from the request.",
+                error_code="PRINT_SETTINGS_NOT_ALLOWED",
+                status_code=400,
+            )
         try:
             _ensure_connected(provider)
         except RuntimeError as ex:
@@ -1249,11 +1385,23 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if not svg_payload:
             return api_error("Uploaded SVG is empty.", error_code="EMPTY_SVG", status_code=400)
 
-        print_request_dict = _resolve_print_request_payload()
+        try:
+            print_request_dict = _resolve_print_request_payload()
+            _build_print_request(print_request_dict)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
         return _submit_print_job("print", svg_payload, svg_file_name, print_request_dict, copies=1)
 
     @app.post("/api/cmd/print/bulk")
     def bulk_print_svg() -> tuple[Response, int]:
+        if not _system_config_initialized():
+            return _config_not_initialized_error()
+        if _request_contains_print_settings():
+            return api_error(
+                "Print settings must come from the server configuration file. Remove printRequestJson and print fields from the request.",
+                error_code="PRINT_SETTINGS_NOT_ALLOWED",
+                status_code=400,
+            )
         try:
             _ensure_connected(provider)
         except RuntimeError as ex:
@@ -1276,7 +1424,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except ValueError as ex:
             return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
 
-        print_request_dict = _resolve_print_request_payload()
+        try:
+            print_request_dict = _resolve_print_request_payload()
+            _build_print_request(print_request_dict)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
         return _submit_print_job("bulk", svg_payload, svg_file_name, print_request_dict, copies=copies)
 
     @app.post("/api/cmd/bulk/stop")
@@ -1472,12 +1624,29 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return work
 
     def _scanner_capture_manual_impl(*, include_data_uri_default: bool) -> tuple[Response, int]:
-        payload = _get_json_dict()
-        if not payload:
-            return api_error("Capture config payload is required.", error_code="SCANNER_CONFIG_REQUIRED", status_code=400)
+        if not _system_config_initialized():
+            return _config_not_initialized_error()
+        if _request_contains_capture_settings():
+            return api_error(
+                "Capture settings must come from the server configuration file. Send an empty body or only includeDataUri.",
+                error_code="CAPTURE_SETTINGS_NOT_ALLOWED",
+                status_code=400,
+            )
 
-        session_payload = _scanner_manual_session_payload(payload)
-        include_data_uri = parse_bool(payload.get("includeDataUri"), default=include_data_uri_default)
+        json_payload = _get_json_dict()
+        include_data_uri = parse_bool(request.args.get("includeDataUri"), default=include_data_uri_default)
+        if json_payload and "includeDataUri" in json_payload:
+            include_data_uri = parse_bool(json_payload.get("includeDataUri"), default=include_data_uri)
+
+        with ui_profile_lock:
+            capture_profile = ui_profile_data.get("capture")
+        if not isinstance(capture_profile, dict):
+            return api_error(
+                "Capture configuration is missing from the system profile.",
+                error_code="SCANNER_CONFIG_REQUIRED",
+                status_code=400,
+            )
+        session_payload, _require_quad = _capture_profile_to_scanner_session_payload(capture_profile)
 
         try:
             manual_config_response = _apply_scanner_session_config(session_payload, require_quad_points=True)

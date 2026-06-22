@@ -59,12 +59,12 @@ Poll from UI/kiosk to render connection, busy state, distance, and bulk state.
 Prints one job. Requires a fresh multipart SVG on every request; the server clears stored SVG after each job. If the printer is already printing (or other jobs are waiting), the job is accepted into an in-memory FIFO queue.
 
 ### How to use
-1. Send multipart form with `svg` (file) and `printRequestJson` (stringified JSON with optional nested `printRequest`).
-2. `POST /api/config/upload` remains optional (e.g. for preview); print does **not** use previously uploaded SVG alone.
+1. Ensure system profile has `initialized: true` (Send scanner config on `/configuration`).
+2. Send multipart form with **`svg`** file only. Print settings are read from `ui-profile.json`.
 
 ### What it takes
 - Multipart: **`svg`** file part (required).
-- Multipart or JSON: print settings via `printRequestJson` or JSON body with `printRequest`.
+- Print settings: server profile only — do **not** send `printRequestJson` or print form fields.
 - Requires header: `X-API-Key`.
 
 ### Response
@@ -72,6 +72,8 @@ Prints one job. Requires a fresh multipart SVG on every request; the server clea
 - **202**: printer busy — `queued: true`, `jobId`, `queuePosition`, `jobType`, `signatureSha256`, `svgFileName`.
 
 ### Error codes
+- `CONFIG_NOT_INITIALIZED` (409) — profile not initialized
+- `PRINT_SETTINGS_NOT_ALLOWED` (400) — print fields in request
 - `PRINTER_STATE_ERROR` (409) — not connected
 - `SVG_REQUIRED` (400) — missing `svg` file part
 - `EMPTY_SVG` (400)
@@ -85,10 +87,10 @@ Prints one job. Requires a fresh multipart SVG on every request; the server clea
 Runs multi-copy printing in **one** server job using one SVG file. Same queue rules as single print: multipart `svg` is required; **202** if printer is busy. After completion or stop, stored SVG is cleared.
 
 ### How to use
-Send multipart form: `svg`, `copies` (1–100), and `printRequestJson` (optional nested `printRequest`).
+Send multipart form: `svg`, `copies` (1–100). Print settings from server profile.
 
 ### What it takes
-- Multipart **`svg`** (required), `copies`, print settings.
+- Multipart **`svg`** (required), `copies`.
 - Requires header: `X-API-Key`.
 
 ### Response

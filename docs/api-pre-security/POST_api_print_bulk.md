@@ -5,7 +5,8 @@
 
 ## What It Takes
 - Same as `/api/print` (multipart **svg** or **file**) plus **copies** (JSON/form/query integer 1..100)
-- Omitted print fields use server **ui-profile** `print` settings; request overrides profile (see `POST /api/print`).
+- Print settings come **only** from the server configuration file (see `POST /api/print`).
+- Requires `initialized: true` in the profile.
 
 ## Response
 - Success envelope (JSON APIs):
@@ -22,4 +23,4 @@
   - data: null
   - errorCode: endpoint error code
   - details: optional extra details
-- Errors: PRINTER_STATE_ERROR (409), EMPTY_SVG (400), PRINT_VALIDATION_ERROR (400), PRINT_RUNTIME_ERROR (400), BULK_PRINT_FAILED (500)
+- Errors: CONFIG_NOT_INITIALIZED (409), PRINT_SETTINGS_NOT_ALLOWED (400), PRINTER_STATE_ERROR (409), EMPTY_SVG (400), PRINT_VALIDATION_ERROR (400), PRINT_RUNTIME_ERROR (400), BULK_PRINT_FAILED (500)

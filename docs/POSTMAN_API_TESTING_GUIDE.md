@@ -72,9 +72,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 **Body → form-data:**
 
 - Row type **File**: key `svg` (or `file`) → choose your `.svg` file.
-- Optional row type **Text**: key `printRequestJson`, value = stringified JSON, e.g.  
-  `{"printRequest":{"paper":"A4","scale":1,"rotation":0,"invertY":true}}`
-- Optional: other [PrintRequest](API_REFERENCE.md#printrequest-fields) keys as separate text fields (`scale`, `xPosition`, …).
+- Print settings are **not** sent in the request; configure via `/configuration` and initialize with Send scanner config.
 
 **Do not** set `Content-Type` manually for multipart; let Postman set the boundary.
 
@@ -91,7 +89,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | ------ | ---- | ------------- | -------------------- | -------------------------- |
 | GET | `/api/cmd/health` | — | 200 | `printerConnected`, `printerBusy`, `captureResetConfigured` |
 | GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
-| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required); optional `printRequestJson` or JSON / form print settings | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, slim `result` (see [API_REFERENCE](API_REFERENCE.md#post-apicmdprint)). 202: `queued: true`, `jobId`, `queuePosition`, … |
+| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 = completed; **202** = queued | 200: `queued`, `jobId`, `jobType`, `svgFileName`, `commandCount`, slim `result` (see [API_REFERENCE](API_REFERENCE.md#post-apicmdprint)). 202: `queued: true`, `jobId`, `queuePosition`, … |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 / 202 | Like print, plus `bulkProgress`; no top-level `copies` on 200; `result` is slim bulk summary |
 | POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | `{ "status": { … } }` — graceful bulk stop after current copy |
 | POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Idle: `data` is `{}` (use `message`). Busy: `{ "status": … }` |
@@ -112,8 +110,8 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | Method | Path | Body / params | Typical success | `data` (summary) |
 | ------ | ---- | ------------- | --------------- | ------------------ |
 | GET | `/api/config` | — | 200 | Scanner/capture flags, `scannerServiceBaseUrl`, … |
-| GET | `/api/config/ui-profile` | — | 200 | `print`, `capture`, `updatedAt` — default shape includes paper/settings and `capture.quad_points` |
-| POST | `/api/config/ui-profile` | JSON **root** object with `print` + `capture` only — **not** the full GET envelope (do not nest under top-level `data`); see [API_REFERENCE](API_REFERENCE.md) “Config — UI profile” | 200 | Full saved profile; `capture` applied to scanner when configured; may include `scannerApplyWarning` |
+| GET | `/api/config/ui-profile` | — | 200 | `initialized`, `printRequestJson`, `print`, `capture`, `updatedAt` |
+| POST | `/api/config/ui-profile` | JSON profile; add `"initialize": true` to finalize (Send scanner config) | 200 | Full saved profile; may include `scannerApplyWarning` on initialize |
 
 **POST errors:** `UI_PROFILE_REQUIRED` (400), `UI_PROFILE_SAVE_FAILED` (500).
 
@@ -199,7 +197,7 @@ Same handler is registered for both paths (use whichever you prefer in Postman).
 | Method | Path | Body | Typical success |
 | ------ | ---- | ---- | --------------- |
 | POST | `/api/config/scanner/capture-manual` | JSON: **`quad_points`** required (4 corners); optional focus/autofocus; optional `includeDataUri` | 200 — `captureId`, `fileName`, `imageUrl`, … |
-| POST | `/api/config/scanner/capture/oneshot` | Same as above | 200 — same |
+| POST | `/api/config/scanner/capture/oneshot` | Empty JSON `{}` (settings from profile) | 200 — same |
 
 ---
 

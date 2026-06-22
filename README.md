@@ -145,16 +145,19 @@ Optional defaults can be set in `appsettings.json` at the repo root:
 }
 ```
 
-Configuration page UI state is also persisted server-side in a JSON profile so values survive server restart:
+Configuration page UI state is persisted server-side in a single JSON profile (`ui-profile.json`) so values survive server restart:
 
 - Default file path:
   - Windows: `%APPDATA%\\plotter-signature\\ui-profile.json`
   - Linux/macOS: `~/.plotter-signature/ui-profile.json`
+  - Production (recommended): `/etc/plotter-signature/ui-profile.json` via `PLOTTER_UI_PROFILE_PATH`
 - Override path with `PLOTTER_UI_PROFILE_PATH`.
-- Persisted values include print layout (`height`, `width`, `xPosition`, `yPosition`, `scale`, `rotation`, `invertX`, `invertY`) and scanner config (`autofocus_enabled`, `manual_focus_value`, `quad_points`).
+- On first run Flask creates an **empty** profile with `initialized: false`.
+- Configure print layout and scanner quad points on `/configuration`, then press **Send scanner config** to set `initialized: true` and enable print/capture APIs.
+- Persisted shape includes `printRequestJson.printRequest`, mirrored `print`, and `capture` (`autofocus_enabled`, `manual_focus_value`, `quad_points`).
+- `POST /api/cmd/print`, bulk print, and `POST /api/config/scanner/capture/oneshot` read settings **only** from this file (not from API request bodies).
 - `quad_points` are stored in scanner-native pixel coordinates (same format as `Send scanner config`).
-- On Flask startup, if the profile JSON exists and has valid scanner config, the server applies focus + quad points to scanner service (best effort). If scanner is unavailable, startup continues and a warning is logged.
-- On first run with no profile JSON file, startup auto-apply is skipped until configuration is saved from `/configuration`.
+- On Flask startup, if `initialized` is true and the profile has valid `capture.quad_points`, the server applies focus + quad points to scanner service (best effort).
 
 Additional runtime environment variables are documented in `docs/TECHNICAL_DOCUMENTATION.md` and `deploy/ubuntu/plotter-signature.env.example`.
 

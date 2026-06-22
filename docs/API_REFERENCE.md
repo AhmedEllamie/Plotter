@@ -112,6 +112,9 @@ All failing JSON responses that use the standard envelope expose a numeric top-l
 | 1037        | `VOID_FAILED`                         |
 | 1038        | `VOID_RUNTIME_ERROR`                  |
 | 1039        | `PEN_DISTANCE_NO_ACTION`              |
+| 1040        | `CAPTURE_SETTINGS_NOT_ALLOWED`        |
+| 1041        | `CONFIG_NOT_INITIALIZED`              |
+| 1042        | `PRINT_SETTINGS_NOT_ALLOWED`          |
 | 0           | *(unregistered / unknown legacy key)* |
 
 
@@ -336,12 +339,11 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 | ----------- | ------------------ | -------------------------------- | -------------- | ------- | ------------------------------------------------------------------------------------------------------- |
 | Header      | `Content-Type`     | `string`                         | Yes            | —       | Must be `multipart/form-data`.                                                                          |
 | Multipart   | `svg` or `file`    | `file` (bytes)                   | **Yes** one of | —       | SVG file for this request only.                                                                         |
-| Multipart   | `printRequestJson` | `string`                         | No             | —       | Stringified JSON; may contain nested `printRequest` with `[PrintRequest](#printrequest-fields)` fields. |
-| Multipart   | (flat keys)        | `string` / `integer` / `boolean` | No             | —       | Any `[PrintRequest](#printrequest-fields)` keys as form fields (e.g. `scale`, `xPosition`).             |
-| Body (JSON) | (entire body)      | `object`                         | No             | —       | Used only if JSON present: top-level keys or nested `printRequest` (see `_extract_print_payload`).      |
 
 
-**Print settings fallback:** Any omitted `[PrintRequest](#printrequest-fields)` values are taken from the persisted server ui-profile (`GET /api/config/ui-profile` → `print` object). Fields sent in the request override the profile.
+**Print settings:** Taken **only** from the persisted server configuration file (`GET /api/config/ui-profile` → `printRequestJson.printRequest`). Do **not** send `printRequestJson`, flat print form fields, or JSON `printRequest` on this endpoint — the server returns `400` `PRINT_SETTINGS_NOT_ALLOWED`.
+
+**Initialization gate:** Requires `initialized: true` in the profile (set via **Send scanner config** on `/configuration`). Otherwise `409` `CONFIG_NOT_INITIALIZED`.
 
 **Preconditions:** Printer connected; otherwise `409` `PRINTER_STATE_ERROR`.
 
@@ -376,6 +378,8 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 
 | Code | Legacy token             | HTTP | Description                                  |
 | ---- | ------------------------ | ---- | -------------------------------------------- |
+| 1041 | `CONFIG_NOT_INITIALIZED` | 409  | Profile not initialized (Send scanner config). |
+| 1042 | `PRINT_SETTINGS_NOT_ALLOWED` | 400  | Print fields sent in request body/form.    |
 | 1022 | `PRINTER_STATE_ERROR`    | 409  | Not connected.                               |
 | 1032 | `SVG_REQUIRED`           | 400  | Missing `svg` part.                          |
 | 1008 | `EMPTY_SVG`              | 400  | Zero-length file.                            |
@@ -384,13 +388,12 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 | 1017 | `PRINT_FAILED`           | 500  | Unexpected failure.                          |
 
 
-**Example request** (multipart + `printRequestJson`)
+**Example request** (SVG only; print settings from server profile)
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
   -H "X-API-Key: QSCWDVEFBRGN" \
-  -F "svg=@./signature.svg;type=image/svg+xml" \
-  -F 'printRequestJson={"printRequest":{"paper":"A4","scale":1,"rotation":0,"invertY":true}}'
+  -F "svg=@./signature.svg;type=image/svg+xml"
 ```
 
 **Example response** `200` (job ran immediately)
@@ -451,7 +454,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
 
 ### `POST /api/cmd/print/bulk`
 
-Same `**multipart/form-data**` and print parameters as single print, plus:
+Same `**multipart/form-data**` as single print (**`svg`** / **`file`** only — no print settings in request), plus:
 
 
 | Location         | Name     | Type      | Required | Constraints | Description              |
@@ -480,8 +483,7 @@ Same `**multipart/form-data**` and print parameters as single print, plus:
 curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
   -H "X-API-Key: QSCWDVEFBRGN" \
   -F "svg=@./signature.svg;type=image/svg+xml" \
-  -F "copies=5" \
-  -F 'printRequestJson={"paper":"A4","scale":1}'
+  -F "copies=5"
 ```
 
 **Example response** `200`
@@ -830,7 +832,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/config/pen-distance" \
 
 #### `GET /api/config/ui-profile`
 
-Returns the saved UI profile: `**print`** (paper, position, scale, rotation, invert flags), `**capture`** (scanner/camera corner quad and focus settings), and `**updatedAt`**.
+Returns the saved system configuration profile: `**initialized**` (bool), `**printRequestJson.printRequest**` (print layout), mirrored `**print**`, `**capture**` (scanner quad and focus), and `**updatedAt**`.
 
 **Example response** `200` uses the usual envelope; `**data`** is the profile object (not wrapped again).
 
@@ -838,37 +840,55 @@ Returns the saved UI profile: `**print`** (paper, position, scale, rotation, inv
 
 #### `POST /api/config/ui-profile`
 
-**Request body is the profile object itself** — a JSON object with top-level `**capture`** and `**print`** keys (same logical shape as `**data`** from `GET /api/config/ui-profile`).
+**Request body is the profile object itself** — JSON with top-level `**capture**`, `**print**`, and/or `**printRequestJson**` (same logical shape as `**data**` from `GET /api/config/ui-profile`).
 
-**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level `**data`** property). The server only reads `**capture`** and `**print`** from the **root** of the JSON body. If you post `{ "data": { "capture": { ... } } }`, `**capture` and `print` are ignored**, the server falls back to defaults (`capture.quad_points` becomes `[]`, `manual_focus_value` to `35`, default `print` settings), and `**success`** can still be `**true`**. You may also see `**scannerApplyWarning`** if scanner session apply fails afterward.
+Optional top-level `**initialize**` (`boolean`): when `true`, validates capture/print, applies scanner session config, and sets `**initialized: true**`. Used by **Send scanner config** on `/configuration`. Draft auto-saves omit this flag so `initialized` stays unchanged.
 
-Optional: on success, `**data**` may include `**scannerApplyWarning**` (string) when the profile file saved but pushing capture settings to the scanner service failed (for example upstream **HTTP 400**).
+**Do not** send the full API response envelope from `GET` (for example, do **not** nest everything under a top-level `**data`** property).
+
+Optional: on success, `**data**` may include `**scannerApplyWarning**` (string) when initialization saved but pushing capture settings to the scanner service failed.
 
 `**updatedAt`** is written by the server on save; clients may omit it in the request.
 
-**Example request body** (root-level `capture` / `print` only)
+**Example request body** (draft save)
 
 ```json
 {
+  "printRequestJson": {
+    "printRequest": {
+      "width": "210mm",
+      "height": "297mm",
+      "xPosition": "0",
+      "yPosition": "0",
+      "scale": 1,
+      "rotation": 0,
+      "invertX": true,
+      "invertY": true
+    }
+  },
   "capture": {
     "autofocus_enabled": false,
     "manual_focus_value": 25,
     "quad_points": [[1727, 45], [1712, 1074], [282, 1057], [287, 50]]
-  },
-  "print": {
-    "width": "210mm",
-    "height": "297mm",
-    "xPosition": "0",
-    "yPosition": "0",
-    "scale": 1,
-    "rotation": 0,
-    "invertX": true,
-    "invertY": true
   }
 }
 ```
 
-**Error codes:** `UI_PROFILE_REQUIRED` (400), `UI_PROFILE_SAVE_FAILED` (500).
+**Example initialize request** (Send scanner config)
+
+```json
+{
+  "initialize": true,
+  "printRequestJson": { "printRequest": { "width": "210mm", "height": "297mm", "xPosition": "0", "yPosition": "0", "scale": 1, "rotation": 0, "invertX": true, "invertY": true } },
+  "capture": {
+    "autofocus_enabled": false,
+    "manual_focus_value": 25,
+    "quad_points": [[1727, 45], [1712, 1074], [282, 1057], [287, 50]]
+  }
+}
+```
+
+**Error codes:** `UI_PROFILE_REQUIRED` (400), `PRINT_VALIDATION_ERROR` (400), `UI_PROFILE_SAVE_FAILED` (500).
 
 ---
 
@@ -898,7 +918,7 @@ curl -sS \
 Body: `multipart/x-mixed-replace` MJPEG stream (binary, not JSON).  
 Errors return JSON envelope with `SCANNER_STREAM_`*.
 
-Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section (`autofocus_enabled`, `manual_focus_value`, `quad_points`). Saving the UI profile applies those settings to the scanner session when scanner integration is configured.
+Scanner manual config lives in the system profile `capture` section. Scanner session apply runs when `POST /api/config/ui-profile` is called with `initialize: true` (Send scanner config).
 
 ---
 
@@ -916,15 +936,16 @@ Returns the raw image bytes (`Content-Type` from stored capture). Requires `X-AP
 
 #### `POST /api/config/scanner/capture/oneshot`
 
-Non-empty JSON body. Scanner-session keys match the `capture` section of `POST /api/config/ui-profile`; `includeDataUri` is API-only and is stripped before the payload is forwarded to the scanner.
+**Empty JSON body** `{}` or no body. Capture settings (`quad_points`, `autofocus_enabled`, `manual_focus_value`) are read from the persisted profile `capture` block — do **not** send them in the request (`400` `CAPTURE_SETTINGS_NOT_ALLOWED`).
+
+Requires `initialized: true` in the profile; otherwise `409` `CONFIG_NOT_INITIALIZED`.
+
+Optional query `includeDataUri` (`boolean`, default `true` for this route). May also be sent as the only key in an empty-ish JSON body.
 
 
-| Location | Name                 | Type                                | Required | Default | Description                                                        |
-| -------- | -------------------- | ----------------------------------- | -------- | ------- | ------------------------------------------------------------------ |
-| Body     | `quad_points`        | `[[number,number],...]` (4 corners) | **Yes**  | —       | Perspective quad in frame pixel coordinates.                       |
-| Body     | `autofocus_enabled`  | `boolean`                           | No       | `false` | When true, scanner runs autofocus before capture.                  |
-| Body     | `manual_focus_value` | `number`                            | No       | `35`    | Manual focus index when autofocus is off.                          |
-| Body     | `includeDataUri`     | `boolean`                           | No       | `true`  | When true, response includes a `data:image/png;base64,...` string. |
+| Location | Name                 | Type      | Required | Default | Description                                                        |
+| -------- | -------------------- | --------- | -------- | ------- | ------------------------------------------------------------------ |
+| Query    | `includeDataUri`     | `boolean` | No       | `true`  | When true, response includes a `data:image/png;base64,...` string. |
 
 
 **Success `data`**
@@ -941,7 +962,7 @@ Non-empty JSON body. Scanner-session keys match the `capture` section of `POST /
 | `dataUri`     | `string`  | Present only when `includeDataUri` is true.                                                                                                 |
 
 
-Common scanner failures use `SCANNER_CAPTURE_FAILED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, or `SCANNER_CONFIG_REQUIRED` (`400` when the body is missing or not a JSON object).
+Common scanner failures use `SCANNER_CAPTURE_FAILED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, `CONFIG_NOT_INITIALIZED` (409), or `CAPTURE_SETTINGS_NOT_ALLOWED` (400).
 
 **Example request**
 
@@ -949,7 +970,7 @@ Common scanner failures use `SCANNER_CAPTURE_FAILED`, `SCANNER_HTTP_ERROR`, `SCA
 curl -sS -X POST "http://127.0.0.1:5000/api/config/scanner/capture/oneshot" \
   -H "X-API-Key: QSCWDVEFBRGN" \
   -H "Content-Type: application/json" \
-  -d "{\"autofocus_enabled\":false,\"manual_focus_value\":35,\"quad_points\":[[100,90],[600,90],[600,400],[100,400]],\"includeDataUri\":true}"
+  -d "{}"
 ```
 
 **Example response** `200` (`dataUri` truncated)
@@ -1047,7 +1068,7 @@ Request log listing/detail config APIs were removed. Use `GET /api/config/print-
 
 ### PrintRequest fields
 
-Used inside multipart `printRequestJson`, nested JSON `printRequest`, or as flat form keys. Omitted keys fall back to ui-profile `print` (see `POST /api/cmd/print`).
+Stored in `printRequestJson.printRequest` in the system profile file. Used by `POST /api/cmd/print` and bulk print when `initialized` is true. Not accepted on print API requests.
 
 
 | Field        | JSON keys                | Type      | Default   | Validation                                                     |

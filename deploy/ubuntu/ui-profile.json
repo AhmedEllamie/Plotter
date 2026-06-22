@@ -1,0 +1,21 @@
+{
+  "initialized": false,
+  "printRequestJson": {
+    "printRequest": {
+      "width": "",
+      "height": "",
+      "xPosition": "",
+      "yPosition": "",
+      "scale": 1,
+      "rotation": 0,
+      "invertX": false,
+      "invertY": true
+    }
+  },
+  "capture": {
+    "autofocus_enabled": false,
+    "manual_focus_value": 35,
+    "quad_points": []
+  },
+  "updatedAt": null
+}

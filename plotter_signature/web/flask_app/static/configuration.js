@@ -17,6 +17,7 @@ const uiState = {
   profileSaveTimer: null,
   profileSaveInFlight: false,
   profileSaveQueued: false,
+  systemInitialized: false,
 };
 const MAX_CONFIG_LOG_LINES = 100;
 
@@ -270,6 +271,17 @@ function persistCaptureSettings() {
   queueServerUiProfileSave();
 }
 
+function printBlockFromServerProfile(profile) {
+  const nested = profile?.printRequestJson?.printRequest;
+  if (nested && typeof nested === "object") {
+    return nested;
+  }
+  if (profile?.print && typeof profile.print === "object") {
+    return profile.print;
+  }
+  return {};
+}
+
 function buildServerUiProfilePayload() {
   const print = readPrintSettingsForm();
   const capture = readCaptureSettingsForm();
@@ -280,17 +292,19 @@ function buildServerUiProfilePayload() {
   const quadPointsPx = Array.isArray(cachedQuadPointsPx) && cachedQuadPointsPx.length === REQUIRED_QUAD_POINTS
     ? cachedQuadPointsPx
     : (Array.isArray(computedQuadPointsPx) ? computedQuadPointsPx : []);
+  const printPayload = {
+    width: String(print.width || "").trim(),
+    height: String(print.height || "").trim(),
+    xPosition: String(print.xPosition || "").trim(),
+    yPosition: String(print.yPosition || "").trim(),
+    scale: Number(print.scale || 1),
+    rotation: Number(print.rotation || 0),
+    invertX: Boolean(print.invertX),
+    invertY: Boolean(print.invertY),
+  };
   return {
-    print: {
-      width: String(print.width || "").trim(),
-      height: String(print.height || "").trim(),
-      xPosition: String(print.xPosition || "").trim(),
-      yPosition: String(print.yPosition || "").trim(),
-      scale: Number(print.scale || 1),
-      rotation: Number(print.rotation || 0),
-      invertX: Boolean(print.invertX),
-      invertY: Boolean(print.invertY),
-    },
+    printRequestJson: { printRequest: printPayload },
+    print: printPayload,
     capture: {
       autofocus_enabled: Boolean(capture.autofocusEnabled),
       manual_focus_value: Number(capture.manualFocusValue || 35),
@@ -303,7 +317,7 @@ function applyServerUiProfile(profile) {
   if (!profile || typeof profile !== "object") {
     return;
   }
-  const print = typeof profile.print === "object" && profile.print !== null ? profile.print : {};
+  const print = printBlockFromServerProfile(profile);
   const capture = typeof profile.capture === "object" && profile.capture !== null ? profile.capture : {};
 
   if (typeof print.width === "string") document.getElementById("width").value = print.width;
@@ -335,8 +349,7 @@ function applyServerUiProfile(profile) {
       .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
   }
 
-  persistPrintSettings();
-  persistCaptureSettings();
+  uiState.systemInitialized = Boolean(profile.initialized);
   renderFocusLabel();
   renderFocusMode();
   renderQuadPoints();
@@ -357,16 +370,20 @@ function queueServerUiProfileSave() {
   }, 500);
 }
 
-async function flushServerUiProfileSave() {
+async function flushServerUiProfileSave(options = {}) {
   if (uiState.profileSaveInFlight) {
     uiState.profileSaveQueued = true;
     return undefined;
   }
   uiState.profileSaveInFlight = true;
   const payload = buildServerUiProfilePayload();
+  if (options.initialize) {
+    payload.initialize = true;
+  }
   try {
     const data = await apiPostJson("/api/config/ui-profile", payload);
     rememberAppliedQuadPointsFromProfile(data);
+    uiState.systemInitialized = Boolean(data.initialized);
     if (data && data.scannerApplyWarning) {
       appendConfigLog(`Scanner apply warning: ${data.scannerApplyWarning}`, true);
     }
@@ -490,12 +507,12 @@ async function disconnectPrinter() {
   }
 }
 
-async function saveServerUiProfileNow() {
+async function saveServerUiProfileNow(options = {}) {
   if (uiState.profileSaveTimer) {
     clearTimeout(uiState.profileSaveTimer);
     uiState.profileSaveTimer = null;
   }
-  return flushServerUiProfileSave();
+  return flushServerUiProfileSave(options);
 }
 
 async function runChangePen() {
@@ -764,19 +781,19 @@ function addQuadPointFromClick(event) {
 }
 
 async function sendScannerConfig() {
-  appendConfigLog("Sending scanner config...");
+  appendConfigLog("Sending scanner config (initialize system)...");
   try {
     const capture = readCaptureSettingsForm();
     buildQuadPointsPxFromCapture(capture, { requireQuadPoints: true });
-    const data = await saveServerUiProfileNow();
+    const data = await saveServerUiProfileNow({ initialize: true });
     const warn = data && data.scannerApplyWarning;
     showConfigMessage(
       warn
-        ? `Scanner config saved with warning: ${warn}`
-        : "Scanner config sent successfully (via UI profile).",
+        ? `System initialized with scanner warning: ${warn}`
+        : "System initialized. Print and capture are enabled.",
       Boolean(warn),
     );
-    appendConfigLog(warn ? `Scanner apply warning: ${warn}` : "Scanner config sent successfully.");
+    appendConfigLog(warn ? `Scanner apply warning: ${warn}` : "System configuration initialized.");
   } catch (error) {
     showConfigMessage(`Send scanner config failed: ${error.message}`, true);
     appendConfigLog(`Scanner config failed: ${error.message}`, true);
@@ -837,13 +854,18 @@ async function initConfigurationPage() {
   hydrateConfiguration();
   try {
     await loadServerUiProfile();
-    appendConfigLog("Loaded configuration profile from server.");
+    appendConfigLog("Loaded configuration profile from server (ui-profile.json).");
+    if (!uiState.systemInitialized) {
+      showConfigMessage("System not initialized. Configure settings, then press Send scanner config.", true);
+    } else {
+      showConfigMessage("System initialized. Print and capture use the server configuration file.");
+    }
   } catch (error) {
-    appendConfigLog(`Server profile load failed, using local settings: ${error.message}`, true);
+    appendConfigLog(`Server profile load failed, using local cache: ${error.message}`, true);
+    showConfigMessage("Could not load server profile. Check API key and server.", true);
   }
   registerPersistenceListeners();
   registerActions();
-  showConfigMessage("Settings are saved automatically in this browser.");
   appendConfigLog("Configuration page initialized.");
 }
 
