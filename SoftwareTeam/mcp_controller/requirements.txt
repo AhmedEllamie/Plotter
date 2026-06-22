@@ -1,0 +1,2 @@
+# Author: Ahmed Ellamie <ahmed.ellamiee@gmail.com>
+mcp>=1.27,<2

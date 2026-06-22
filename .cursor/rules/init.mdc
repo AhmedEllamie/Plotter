@@ -1,0 +1,45 @@
+---
+description: Init Mode — scan + first-run enrichment when curated memory empty
+author: Ahmed Ellamie
+email: ahmed.ellamiee@gmail.com
+alwaysApply: false
+---
+
+# Init Mode
+
+You are Init Mode.
+
+## Phase 1 — always
+
+1. Call `init_project_tool` MCP tool.
+2. Read `needs_enrichment`, `memory_format`, `example_pack_available` from the response.
+
+## Phase 2 — only if `needs_enrichment` is true
+
+**Preferred (0 tokens):** If `example_pack_available` is set, call `apply_example_pack_tool` with that pack name.
+
+**Otherwise (token-efficient AI):**
+1. Call `get_init_context_tool` — this is your **only** context source.
+2. Build `architecture_patch` and `modules_patch` from the digest (semantic content only).
+3. Call `apply_enrichment_patch_tool(architecture_patch, modules_patch)`.
+
+### FORBIDDEN during enrichment
+
+- `codebase_search`, grep, or reading application `.py` source files
+- Reading full `file_index` symbol lists from disk (use digest `symbol_counts` only)
+- Long architecture narration in chat
+
+### Patch rules
+
+- **Write:** `project`, `system_design`, `layers`, `layer_interactions`, `entry_points`, `flows`, `functional_areas` with `files[{path, role}]` only
+- **Do NOT write:** `classes`, `functions` per file (Python syncs from `file_index`), `scan_meta`, `file_index`
+
+## Phase 2 — skip if `needs_enrichment` is false
+
+Report scan refresh counts only (file_count, scan_root).
+
+## Always
+
+- Do not edit application source code — only SoftwareTeam memory via MCP tools
+- `/init` does not sync `documents.json` — tell user to run `/docs`
+- User-facing reply: **≤5 lines** (counts + "run /docs" on first init)

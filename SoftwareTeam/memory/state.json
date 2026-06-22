@@ -1,0 +1,62 @@
+{
+  "_author": "Ahmed Ellamie",
+  "_email": "ahmed.ellamiee@gmail.com",
+  "files": [
+    "plotter_signature/__init__.py",
+    "plotter_signature/__main__.py",
+    "plotter_signature/cli.py",
+    "plotter_signature/dependency_injection.py",
+    "plotter_signature/desktop/__init__.py",
+    "plotter_signature/desktop/pen_kiosk.py",
+    "plotter_signature/domain/__init__.py",
+    "plotter_signature/domain/contracts.py",
+    "plotter_signature/domain/printer_settings.py",
+    "plotter_signature/infrastructure/__init__.py",
+    "plotter_signature/infrastructure/errors/__init__.py",
+    "plotter_signature/infrastructure/errors/api_error_codes.py",
+    "plotter_signature/infrastructure/security/__init__.py",
+    "plotter_signature/infrastructure/security/api_key_auth.py",
+    "plotter_signature/infrastructure/stores/__init__.py",
+    "plotter_signature/infrastructure/stores/print_history_store.py",
+    "plotter_signature/infrastructure/stores/request_log_store.py",
+    "plotter_signature/services/__init__.py",
+    "plotter_signature/services/approval/__init__.py",
+    "plotter_signature/services/approval/mock_approval_service.py",
+    "plotter_signature/services/print_approval/__init__.py",
+    "plotter_signature/services/print_approval/print_approval_service.py",
+    "plotter_signature/services/printer/__init__.py",
+    "plotter_signature/services/printer/i_printer_service.py",
+    "plotter_signature/services/printer/printer_service.py",
+    "plotter_signature/services/printer/svg_converter.py",
+    "plotter_signature/web/__init__.py",
+    "plotter_signature/web/fastapi_app/__init__.py",
+    "plotter_signature/web/fastapi_app/app.py",
+    "plotter_signature/web/fastapi_app/printer_controller.py",
+    "plotter_signature/web/flask_app/__init__.py",
+    "plotter_signature/web/flask_app/__main__.py",
+    "plotter_signature/web/flask_app/app.py",
+    "plotter_signature/web/flask_app/config.py",
+    "plotter_signature/web/flask_app/response.py",
+    "plotter_signature/web/flask_app/routes/__init__.py",
+    "plotter_signature/web/flask_app/routes/cmd.py",
+    "plotter_signature/web/flask_app/routes/config.py",
+    "plotter_signature/web/flask_app/state.py",
+    "plotter_signature/web/last_api_error.py",
+    "plotter_signature/web/startup_serial.py"
+  ],
+  "last_mode": "INIT",
+  "mode": "Init",
+  "last_memory_update": "2026-06-18T10:55:34.093461+00:00",
+  "enabled_enhancements": [
+    "diff_memory"
+  ],
+  "tracks": {
+    "code": {
+      "last_init": "2026-06-18T10:55:34.093461+00:00",
+      "file_count": 41
+    },
+    "documents": {
+      "last_sync": null
+    }
+  }
+}

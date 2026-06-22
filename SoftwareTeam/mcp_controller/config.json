@@ -1,0 +1,76 @@
+{
+    "test_command":  "echo Configure test_command in config.json",
+    "enhancements":  {
+                         "pipeline":  false,
+                         "semantic_memory":  false,
+                         "dependency_graph":  false,
+                         "diff_memory":  true,
+                         "tester":  false
+                     },
+    "preserve_keys":  {
+                          "architecture.json":  [
+                                                    "project",
+                                                    "system_design",
+                                                    "layer_interactions",
+                                                    "dependency_rules",
+                                                    "layers",
+                                                    "entry_points",
+                                                    "external_systems",
+                                                    "config_sources",
+                                                    "flows",
+                                                    "deployment",
+                                                    "notes"
+                                                ],
+                          "modules.json":  [
+                                               "functional_areas"
+                                           ],
+                          "documents.json":  [
+                                                 "categories"
+                                             ]
+                      },
+    "example_pack":  "",
+    "pipeline_modes":  [
+                           "Init",
+                           "Architect",
+                           "Coder",
+                           "Reviewer",
+                           "Tester"
+                       ],
+    "scan_extensions":  [
+                            ".py"
+                        ],
+    "_author":  "Ahmed Ellamie",
+    "code_package_prefix":  "plotter_signature/",
+    "docs_scan":  {
+                      "roots":  [
+                                    "docs"
+                                ],
+                      "extensions":  [
+                                         ".md"
+                                     ],
+                      "exclude_dirs":  [
+                                           "generated",
+                                           "doxygen",
+                                           "__pycache__",
+                                           ".git"
+                                       ],
+                      "exclude_globs":  [
+                                            "**/*.html",
+                                            "**/*.js",
+                                            "**/*.css"
+                                        ]
+                  },
+    "_email":  "ahmed.ellamiee@gmail.com",
+    "scan_exclude_dirs":  [
+                              "__pycache__",
+                              ".venv",
+                              "venv",
+                              "node_modules",
+                              ".git",
+                              "build",
+                              "dist",
+                              "SoftwareTeam"
+                          ],
+    "project_root":  "../..",
+    "scan_root":  "plotter_signature"
+}

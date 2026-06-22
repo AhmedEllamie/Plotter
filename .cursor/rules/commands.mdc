@@ -1,0 +1,39 @@
+---
+description: Maps /init /update /docs /architect /coder /reviewer chat commands to MCP tools
+author: Ahmed Ellamie
+email: ahmed.ellamiee@gmail.com
+alwaysApply: true
+---
+
+# SoftwareTeam Chat Commands
+
+When the user types these commands, invoke the matching MCP tool from `project_controller`:
+
+| User command | MCP tool | Then follow |
+|--------------|----------|-------------|
+| `/init` | `init_project_tool` | If `needs_enrichment`: example pack or digest enrichment per init.mdc; else report scan only |
+| `/update` | `update_memory_tool` | Report incremental sync from recent_changes.json |
+| `/docs` | `sync_documents_tool` | Report doc catalog sync |
+| `/architect` or `/mode Architect` | `set_mode_tool("Architect")` | architect.mdc rules |
+| `/coder` or `/mode Coder` | `set_mode_tool("Coder")` | coder.mdc rules |
+| `/reviewer` or `/mode Reviewer` | `set_mode_tool("Reviewer")` | reviewer.mdc rules |
+| `/mode Init` | `set_mode_tool("Init")` | init.mdc rules |
+| `/state` | `get_state` | Summarize current mode and memory |
+| `/test` or `/tester` | `run_tests` | Only if tester enhancement enabled |
+| `/pipeline <task>` | `run_pipeline` | Only if pipeline enhancement enabled |
+
+After Coder edits a file, always call `record_change_tool` with file path, summary, and diff.
+
+**Init enrichment MCP tools (first init only):**
+- `get_init_context_tool` — compact digest for AI enrichment
+- `apply_enrichment_patch_tool` — merge curated JSON + sync symbols
+- `apply_example_pack_tool` — zero-token curated seeds when available
+- `render_memory_docs_tool` — re-render docs from memory JSON
+
+**Memory tracks (do not mix):**
+- Code architecture → `memory/architecture.json`, `docs/architecture.md`
+- Code modules → `memory/modules.json`, `docs/modules.md`
+- Project docs catalog → `memory/documents.json`, `docs/documents.md` (use `/docs`, not `/init`)
+- `docs/generated/` is never part of code memory
+
+Read context from `SoftwareTeam/docs/` and `SoftwareTeam/memory/` — not full repo search unless user explicitly asks.

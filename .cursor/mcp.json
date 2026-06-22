@@ -1,0 +1,12 @@
+{
+    "mcpServers":  {
+                       "project_controller":  {
+                                                  "args":  [
+                                                               "D:/Projects/Python/Automate_Signature/plotter-signature/SoftwareTeam/mcp_controller/server.py"
+                                                           ],
+                                                  "command":  "C:\\Users\\Ahmed Ellamie\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+                                              }
+                   },
+    "_email":  "ahmed.ellamiee@gmail.com",
+    "_author":  "Ahmed Ellamie"
+}

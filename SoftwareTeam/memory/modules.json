@@ -1,0 +1,423 @@
+{
+  "_author": "Ahmed Ellamie",
+  "_email": "ahmed.ellamiee@gmail.com",
+  "functional_areas": [],
+  "file_index": {
+    "plotter_signature/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-23T07:11:40.201760+00:00"
+    },
+    "plotter_signature/__main__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-23T07:11:40.202760+00:00"
+    },
+    "plotter_signature/cli.py": {
+      "classes": [
+        "CliSerialConnectError"
+      ],
+      "functions": [
+        "_build_print_request",
+        "_candidate_match_text",
+        "_cmd_bulk_print_async",
+        "_cmd_pen_change_finish_async",
+        "_cmd_pen_change_start_async",
+        "_cmd_print_async",
+        "_cmd_print_with_approval_async",
+        "_convert_svg_for_cli",
+        "_ensure_connected",
+        "_json_arg_to_dict",
+        "_normalize_serial_device",
+        "_print_json",
+        "_resolve_device_match",
+        "_select_serial_device",
+        "build_parser",
+        "cmd_bulk_print",
+        "cmd_connect",
+        "cmd_disconnect",
+        "cmd_distance_stats",
+        "cmd_generate",
+        "cmd_get_request",
+        "cmd_pen_change_finish",
+        "cmd_pen_change_start",
+        "cmd_print",
+        "cmd_print_with_approval",
+        "cmd_reset_distance",
+        "cmd_scan_serial",
+        "cmd_serve_api",
+        "cmd_serve_flask",
+        "cmd_set_pen_max_distance",
+        "cmd_status",
+        "connect_printer_serial",
+        "main",
+        "scan_serial_devices"
+      ],
+      "mtime": "2026-05-07T05:35:27.226591+00:00"
+    },
+    "plotter_signature/dependency_injection.py": {
+      "classes": [
+        "ServiceProvider"
+      ],
+      "functions": [
+        "_load_default_config",
+        "_parse_serial_identity_contains",
+        "build_service_provider",
+        "get_service_provider",
+        "reset_service_provider"
+      ],
+      "mtime": "2026-05-19T06:57:21.946937+00:00"
+    },
+    "plotter_signature/desktop/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-22T11:56:41.982952+00:00"
+    },
+    "plotter_signature/desktop/pen_kiosk.py": {
+      "classes": [
+        "PenKioskApp"
+      ],
+      "functions": [
+        "_kiosk_settings_path",
+        "_load_kiosk_settings",
+        "_local_ipv4s_for_display",
+        "_read_plotter_api_key_from_file",
+        "_strict_kiosk_enabled",
+        "main"
+      ],
+      "mtime": "2026-06-17T04:36:02.120517+00:00"
+    },
+    "plotter_signature/domain/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-22T11:56:36.446216+00:00"
+    },
+    "plotter_signature/domain/contracts.py": {
+      "classes": [
+        "ApprovalResponse",
+        "ApprovalServiceSettings",
+        "Paper",
+        "PrintApprovalRequest",
+        "PrintRequest",
+        "PrintResponse",
+        "PrintRetrySettings",
+        "PrintWithApprovalRequest",
+        "PrintWithApprovalResponse",
+        "PrinterStatus",
+        "RequestLog",
+        "RequestStatus"
+      ],
+      "functions": [
+        "get_paper_size_mm",
+        "parse_bool",
+        "parse_paper"
+      ],
+      "mtime": "2026-05-14T11:01:49.201738+00:00"
+    },
+    "plotter_signature/domain/printer_settings.py": {
+      "classes": [
+        "PrinterSettings"
+      ],
+      "functions": [],
+      "mtime": "2026-05-19T06:57:22.417301+00:00"
+    },
+    "plotter_signature/infrastructure/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-22T11:56:38.114067+00:00"
+    },
+    "plotter_signature/infrastructure/errors/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-05-11T07:31:50.581103+00:00"
+    },
+    "plotter_signature/infrastructure/errors/api_error_codes.py": {
+      "classes": [],
+      "functions": [
+        "fastapi_http_exception_legacy_token",
+        "fastapi_validation_error_legacy_token",
+        "format_fastapi_message",
+        "normalize_api_error_parts",
+        "numeric_code_for_legacy"
+      ],
+      "mtime": "2026-05-11T08:51:06.305916+00:00"
+    },
+    "plotter_signature/infrastructure/security/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-05-07T08:30:50.146977+00:00"
+    },
+    "plotter_signature/infrastructure/security/api_key_auth.py": {
+      "classes": [
+        "ApiKeyValidationResult"
+      ],
+      "functions": [
+        "get_configured_api_key",
+        "get_effective_stream_query_secret",
+        "is_api_key_required",
+        "stream_query_token_is_valid",
+        "validate_api_key"
+      ],
+      "mtime": "2026-05-07T08:30:37.308684+00:00"
+    },
+    "plotter_signature/infrastructure/stores/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-22T11:56:39.040263+00:00"
+    },
+    "plotter_signature/infrastructure/stores/print_history_store.py": {
+      "classes": [
+        "PrintHistoryStore"
+      ],
+      "functions": [
+        "_utc_now_iso",
+        "default_print_history_db_path"
+      ],
+      "mtime": "2026-04-28T12:32:47.195708+00:00"
+    },
+    "plotter_signature/infrastructure/stores/request_log_store.py": {
+      "classes": [
+        "RequestLogStore"
+      ],
+      "functions": [],
+      "mtime": "2026-04-29T07:02:11.650404+00:00"
+    },
+    "plotter_signature/services/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-09T10:03:27.479432+00:00"
+    },
+    "plotter_signature/services/approval/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-09T10:03:27.481430+00:00"
+    },
+    "plotter_signature/services/approval/mock_approval_service.py": {
+      "classes": [
+        "IApprovalService",
+        "MockApprovalService"
+      ],
+      "functions": [],
+      "mtime": "2026-04-23T07:11:40.212759+00:00"
+    },
+    "plotter_signature/services/print_approval/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-09T10:03:27.483927+00:00"
+    },
+    "plotter_signature/services/print_approval/print_approval_service.py": {
+      "classes": [
+        "PrintApprovalService"
+      ],
+      "functions": [],
+      "mtime": "2026-04-29T07:02:11.650404+00:00"
+    },
+    "plotter_signature/services/printer/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-09T10:03:27.485932+00:00"
+    },
+    "plotter_signature/services/printer/i_printer_service.py": {
+      "classes": [
+        "IPrinterService"
+      ],
+      "functions": [],
+      "mtime": "2026-05-07T05:12:05.689404+00:00"
+    },
+    "plotter_signature/services/printer/printer_service.py": {
+      "classes": [
+        "AutoConnectFailedError",
+        "PrinterService",
+        "SerialIdentityError"
+      ],
+      "functions": [],
+      "mtime": "2026-05-19T07:40:07.999162+00:00"
+    },
+    "plotter_signature/services/printer/svg_converter.py": {
+      "classes": [
+        "PointD"
+      ],
+      "functions": [
+        "_angle_of",
+        "_approximate_ellipse",
+        "_determine_unit_to_mm",
+        "_extract_circle_element",
+        "_extract_ellipse_element",
+        "_extract_line_element",
+        "_extract_path_element",
+        "_extract_paths",
+        "_extract_polyline_element",
+        "_extract_rect_element",
+        "_flatten_arc",
+        "_flatten_cubic_bezier",
+        "_flatten_cubic_recursive",
+        "_flatten_quadratic_bezier",
+        "_get_attr_double",
+        "_load_svg_root",
+        "_local_name",
+        "_parse_double",
+        "_parse_mm",
+        "_parse_path_data",
+        "_parse_svg_length",
+        "_parse_view_box",
+        "_rotate_point",
+        "_tokenize_path",
+        "_try_consume",
+        "_try_parse_explicit_mm",
+        "convert_to_gcode"
+      ],
+      "mtime": "2026-05-05T10:33:49.066108+00:00"
+    },
+    "plotter_signature/web/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-22T11:56:41.419130+00:00"
+    },
+    "plotter_signature/web/fastapi_app/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-22T11:56:41.895248+00:00"
+    },
+    "plotter_signature/web/fastapi_app/app.py": {
+      "classes": [],
+      "functions": [
+        "create_app"
+      ],
+      "mtime": "2026-05-11T07:31:50.615199+00:00"
+    },
+    "plotter_signature/web/fastapi_app/printer_controller.py": {
+      "classes": [],
+      "functions": [
+        "_convert_svg",
+        "_ensure_connected",
+        "_ensure_not_busy",
+        "_parse_print_with_approval_request",
+        "_print_request_form",
+        "_printer_status_public_dict",
+        "_read_upload_to_stream",
+        "_require_api_key",
+        "create_printer_router"
+      ],
+      "mtime": "2026-05-11T07:31:50.622717+00:00"
+    },
+    "plotter_signature/web/flask_app/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-23T07:11:40.220838+00:00"
+    },
+    "plotter_signature/web/flask_app/__main__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-23T07:11:40.221837+00:00"
+    },
+    "plotter_signature/web/flask_app/app.py": {
+      "classes": [
+        "_QueuedPrintJob"
+      ],
+      "functions": [
+        "_build_print_request",
+        "_build_scanner_headers",
+        "_capture_profile_to_scanner_session_payload",
+        "_compact_print_history_item",
+        "_convert_svg",
+        "_default_ui_profile_data",
+        "_default_ui_profile_path",
+        "_ensure_connected",
+        "_ensure_not_busy",
+        "_extract_bulk_copies",
+        "_extract_print_payload",
+        "_filter_print_request_fields",
+        "_get_json_dict",
+        "_is_meaningful_print_value",
+        "_load_ui_profile_data",
+        "_merge_print_request_payload",
+        "_parse_optional_int",
+        "_print_request_dict_to_profile_block",
+        "_printer_status_public_dict",
+        "_run_async",
+        "_sanitize_ui_profile_data",
+        "_save_ui_profile_data",
+        "_scanner_request_bytes",
+        "_scanner_request_json",
+        "_slim_bulk_result",
+        "_slim_bulk_stop_status_payload",
+        "_slim_single_print_result",
+        "_to_iso8601_utc",
+        "create_app"
+      ],
+      "mtime": "2026-06-17T10:07:35.127553+00:00"
+    },
+    "plotter_signature/web/flask_app/config.py": {
+      "classes": [
+        "FlaskCaptureSettings",
+        "ScannerServiceSettings"
+      ],
+      "functions": [
+        "_parse_float",
+        "load_capture_settings",
+        "load_scanner_service_settings"
+      ],
+      "mtime": "2026-04-30T10:39:12.931701+00:00"
+    },
+    "plotter_signature/web/flask_app/response.py": {
+      "classes": [],
+      "functions": [
+        "api_error",
+        "api_success"
+      ],
+      "mtime": "2026-05-11T07:31:50.622717+00:00"
+    },
+    "plotter_signature/web/flask_app/routes/__init__.py": {
+      "classes": [],
+      "functions": [],
+      "mtime": "2026-04-23T11:09:48.366145+00:00"
+    },
+    "plotter_signature/web/flask_app/routes/cmd.py": {
+      "classes": [],
+      "functions": [
+        "register_cmd_routes"
+      ],
+      "mtime": "2026-04-23T11:09:53.448615+00:00"
+    },
+    "plotter_signature/web/flask_app/routes/config.py": {
+      "classes": [],
+      "functions": [
+        "register_config_routes"
+      ],
+      "mtime": "2026-05-14T11:04:22.258519+00:00"
+    },
+    "plotter_signature/web/flask_app/state.py": {
+      "classes": [
+        "CapturedImage",
+        "RuntimeState",
+        "UploadedSvg"
+      ],
+      "functions": [],
+      "mtime": "2026-05-11T10:55:07.444518+00:00"
+    },
+    "plotter_signature/web/last_api_error.py": {
+      "classes": [
+        "LastApiErrorSnapshot"
+      ],
+      "functions": [
+        "clear_last_api_error",
+        "get_last_api_error",
+        "record_api_error"
+      ],
+      "mtime": "2026-05-11T07:31:50.581103+00:00"
+    },
+    "plotter_signature/web/startup_serial.py": {
+      "classes": [],
+      "functions": [
+        "run_startup_autoconnect",
+        "startup_autoconnect_enabled"
+      ],
+      "mtime": "2026-06-17T04:36:02.110092+00:00"
+    }
+  },
+  "scan_meta": {
+    "last_init": "2026-06-18T10:55:34.089450+00:00",
+    "file_count": 41,
+    "scan_root": "plotter_signature"
+  }
+}
