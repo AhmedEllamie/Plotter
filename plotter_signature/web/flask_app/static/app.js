@@ -35,18 +35,21 @@ function clampPercent(value) {
 
 function jobTypeLabel(jobType, job) {
   if (jobType === "bulk") {
-    const copies = job?.copiesRequested ?? "?";
-    return `Bulk (${copies} copies)`;
+    const name = job?.svgFileName ? ` — ${job.svgFileName}` : "";
+    return `Bulk${name}`;
   }
   if (jobType === "bulk_stop") return "Bulk stop";
   if (jobType === "void") return "Void";
   return "Print";
 }
 
+function isTerminalJobStatus(status) {
+  return status === "completed" || status === "failed" || status === "stopped";
+}
+
 function statusLabel(job) {
   if (job.status === "running") return "running";
   if (job.status === "pending") return "pending";
-  if (job.status === "finished") return job.outcome || "finished";
   return job.status || "unknown";
 }
 
@@ -63,7 +66,7 @@ function trackJob(jobId, jobType, extra = {}) {
 
 function untrackFinishedJobs() {
   for (const [jobId, job] of state.trackedJobs.entries()) {
-    if (job.status === "finished") {
+    if (isTerminalJobStatus(job.status)) {
       state.trackedJobs.delete(jobId);
     }
   }
@@ -118,12 +121,9 @@ function renderQueuePanel(queueData, errorMessage = "") {
   for (const job of items) {
     const row = document.createElement("div");
     const displayStatus = job.displayStatus || job.status;
-    const outcome = job.outcome;
     let rowClass = "job-queue-item";
     if (displayStatus === "running") rowClass += " running";
     else if (displayStatus === "pending") rowClass += " pending";
-    else if (outcome === "failed" || outcome === "stopped") rowClass += " finished-bad";
-    else rowClass += " finished-ok";
     row.className = rowClass;
 
     const label = document.createElement("span");
@@ -139,24 +139,22 @@ function renderQueuePanel(queueData, errorMessage = "") {
 
 function syncBulkStateFromQueue(queueData) {
   const active = queueData?.active;
-  const isBulkActive = active?.jobType === "bulk" && active?.status === "running";
-  state.bulkRunning = isBulkActive;
-  if (isBulkActive) {
-    state.bulkRequestedTotal = Number(active.copiesRequested || 0);
-    const progress = active.result?.bulkProgress;
-    if (progress) {
-      state.bulkPrintedCount = Number(progress.printedCount || 0);
-      state.bulkRequestedTotal = Number(progress.requestedTotal || state.bulkRequestedTotal);
-    } else {
-      state.bulkPrintedCount = Number(active.copiesPrinted || 0);
-    }
-  } else if (!state.trackedJobs.size) {
-    state.bulkRunning = false;
+  state.bulkRunning = active?.jobType === "bulk" && active?.status === "running";
+  if (!state.bulkRunning && !state.trackedJobs.size) {
     state.bulkStopRequested = false;
   }
-  updateBulkProgressLabel();
   updateBulkUiState();
   updatePrintCaptureUiState();
+}
+
+function syncBulkStateFromStatus(status) {
+  const requested = Number(status?.bulk_requested_total || 0);
+  const printed = Number(status?.bulk_printed_count || 0);
+  if (requested > 0 || printed > 0 || state.bulkRunning) {
+    state.bulkRequestedTotal = requested;
+    state.bulkPrintedCount = printed;
+    updateBulkProgressLabel();
+  }
 }
 
 function queueHasOpenJobs(queueData) {
@@ -197,25 +195,25 @@ function stopQueuePollingIfIdle(queueData) {
 
 async function pollTrackedJobs() {
   const pendingIds = [...state.trackedJobs.values()]
-    .filter((job) => job.status !== "finished")
+    .filter((job) => !isTerminalJobStatus(job.status))
     .map((job) => job.jobId);
 
   for (const jobId of pendingIds) {
     try {
-      const snapshot = await apiGet(`/api/cmd/jobs/${encodeURIComponent(jobId)}`);
+      const polled = await apiGetJobStatus(`/api/cmd/jobs/${encodeURIComponent(jobId)}`);
+      const snapshot = polled.data;
       const existing = state.trackedJobs.get(jobId) || { jobId };
       const merged = { ...existing, ...snapshot };
       state.trackedJobs.set(jobId, merged);
 
-      if (snapshot.status === "finished") {
+      if (isTerminalJobStatus(snapshot.status)) {
         const label = jobTypeLabel(snapshot.jobType, snapshot);
-        if (snapshot.outcome === "completed") {
+        if (snapshot.status === "completed") {
           appendLog(`${label} finished (${snapshot.jobId.slice(0, 8)}…).`);
-        } else {
-          appendLog(
-            `${label} ${snapshot.outcome || "failed"}: ${snapshot.errorMessage || "No details."}`,
-            true
-          );
+        } else if (snapshot.status === "failed") {
+          appendLog(`${label} failed: ${polled.message || "No details."}`, true);
+        } else if (snapshot.status === "stopped") {
+          appendLog(`${label} stopped (${snapshot.jobId.slice(0, 8)}…).`);
         }
       }
     } catch (error) {
@@ -226,7 +224,7 @@ async function pollTrackedJobs() {
   untrackFinishedJobs();
   const queueData = await refreshJobQueue();
 
-  const stillTracked = [...state.trackedJobs.values()].some((job) => job.status !== "finished");
+  const stillTracked = [...state.trackedJobs.values()].some((job) => !isTerminalJobStatus(job.status));
   const stillQueued = queueHasOpenJobs(queueData);
   if (!stillTracked && !stillQueued && state.jobPollHandle) {
     clearInterval(state.jobPollHandle);
@@ -336,6 +334,7 @@ function renderStatusGui(status) {
   const hasPenConfig = Number(status.max_pen_distance_m || 0) > 0;
 
   renderErrorPanel(status);
+  syncBulkStateFromStatus(status);
 
   setBadgeState(
     "statusConnectionBadge",

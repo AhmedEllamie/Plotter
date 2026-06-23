@@ -11,8 +11,8 @@ Common success envelope:
 Common error envelope:
 - `success: false`
 - `message: string`
-- `data: null`
-- `errorCode: string`
+- `data: object | null` (failed job polls may include slim job in `data`)
+- `errorCode: integer`
 - `details: object` (optional)
 
 ## `GET /api/cmd/health`
@@ -61,6 +61,7 @@ Returns the server-wide FIFO command queue snapshot.
 ### Response
 - `active`: running job or `null`
 - `pending`: array of pending jobs in order
+- Each job: `jobId`, `jobType`, `status` (`pending` | `running`), `queuePosition` when pending, `svgFileName`
 
 ## `GET /api/cmd/jobs/{job_id}`
 
@@ -68,10 +69,11 @@ Returns the server-wide FIFO command queue snapshot.
 Poll async command job status (print, bulk, void, bulk_stop).
 
 ### Response
-- `jobId`, `jobType`, `status` (`pending` | `running` | `finished`)
-- `outcome` when finished: `completed`, `failed`, or `stopped`
+- `jobId`, `jobType`, `status` (`pending` | `running` | `completed` | `failed` | `stopped`)
 - `queuePosition` when pending
-- `result`, `errorMessage`, `errorCode` when applicable
+- `svgFileName` when applicable
+- `result` when `status` is `completed` or `stopped`
+- On `status: failed`: HTTP `200`, `success: false`, errors in top-level `message` / `errorCode` (not in `data`)
 
 ### Error codes
 - `CMD_JOB_NOT_FOUND` (404)
@@ -84,7 +86,7 @@ Accepts a print job into the unified async command queue. Does **not** block unt
 ### How to use
 1. Ensure system profile has `initialized: true` (Send scanner config on `/configuration`).
 2. Send multipart form with **`svg`** file only. Print settings are read from `ui-profile.json`.
-3. Poll `GET /api/cmd/jobs/{jobId}` until `status` is `finished`.
+3. Poll `GET /api/cmd/jobs/{jobId}` until `status` is `completed`, `failed`, or `stopped`.
 
 ### What it takes
 - Multipart: **`svg`** file part (required).
@@ -108,7 +110,7 @@ Accepts a print job into the unified async command queue. Does **not** block unt
 Accepts a multi-copy bulk job into the async queue. Same accept contract as single print.
 
 ### How to use
-Send multipart form: `svg`, `copies` (1–100). Poll job status until finished.
+Send multipart form: `svg`, `copies` (1–100). Poll job status until terminal (`completed`, `failed`, or `stopped`). Use `GET /api/cmd/status` for live bulk counts while running.
 
 ### What it takes
 - Multipart **`svg`** (required), `copies`.
@@ -137,7 +139,7 @@ Call while bulk is running. Poll the bulk print job id for G-code completion; po
 
 ### Error codes
 - `PRINTER_STATE_ERROR` (409) — not connected
-- Job may finish with `outcome: failed` and `PRINTER_NOT_BUSY` if no bulk is active when executed
+- Job may finish with `status: failed` and top-level `PRINTER_NOT_BUSY` if no bulk is active when executed
 
 ## `POST /api/cmd/void`
 

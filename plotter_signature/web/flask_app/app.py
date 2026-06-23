@@ -34,7 +34,7 @@ from plotter_signature.infrastructure.security.api_key_auth import (
 )
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
 from plotter_signature.web.flask_app.config import ScannerServiceSettings, load_capture_settings, load_scanner_service_settings
-from plotter_signature.web.flask_app.response import api_error, api_success
+from plotter_signature.web.flask_app.response import api_error, api_job_status, api_success
 from plotter_signature.web.last_api_error import get_last_api_error
 from plotter_signature.web.flask_app.state import RuntimeState
 from plotter_signature.web.startup_serial import run_startup_autoconnect
@@ -675,45 +675,53 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         except ValueError:
             return None
 
-    def _job_db_status_to_api(db_status: str) -> tuple[str, str | None]:
-        if db_status == "queued":
-            return "pending", None
-        if db_status == "started":
-            return "running", None
-        if db_status in ("completed", "failed", "stopped"):
-            return "finished", db_status
-        return "finished", "failed"
+    def _job_db_status_to_api(db_status: str) -> str:
+        mapping = {
+            "queued": "pending",
+            "started": "running",
+            "completed": "completed",
+            "failed": "failed",
+            "stopped": "stopped",
+        }
+        return mapping.get(db_status, "failed")
 
-    def _job_public_dict(row: dict[str, Any], *, queue_position: int | None = None) -> dict[str, Any]:
-        api_status, outcome = _job_db_status_to_api(str(row.get("status") or ""))
-        job_type = str(row.get("job_type") or "")
+    def _job_result_payload(row: dict[str, Any], api_status: str) -> dict[str, Any] | None:
+        if api_status not in ("completed", "stopped"):
+            return None
         result_blob = row.get("result")
+        if not isinstance(result_blob, dict):
+            return None
+        payload = result_blob.get("payload")
+        if isinstance(payload, dict):
+            return payload
+        return result_blob
+
+    def _job_failure_parts(row: dict[str, Any]) -> tuple[str | None, str | int | None]:
         error_message = row.get("error_message")
         error_code = None
-        result_payload = None
+        result_blob = row.get("result")
         if isinstance(result_blob, dict):
             error_code = result_blob.get("errorCode")
-            if isinstance(result_blob.get("payload"), dict):
-                result_payload = result_blob["payload"]
-            elif api_status == "finished" and outcome == "completed":
-                result_payload = result_blob
+        return error_message, error_code
+
+    def _job_base_dict(row: dict[str, Any], *, queue_position: int | None = None) -> dict[str, Any]:
+        api_status = _job_db_status_to_api(str(row.get("status") or ""))
         out: dict[str, Any] = {
             "jobId": str(row.get("id") or ""),
-            "jobType": job_type,
+            "jobType": str(row.get("job_type") or ""),
             "status": api_status,
-            "outcome": outcome,
-            "errorMessage": error_message,
-            "errorCode": error_code,
-            "queuedAt": row.get("queued_at"),
-            "startedAt": row.get("started_at"),
-            "completedAt": row.get("completed_at"),
             "svgFileName": row.get("signature_file_name") or None,
-            "signatureSha256": row.get("signature_sha256") or None,
-            "copiesRequested": int(row.get("copies_requested") or 0),
-            "copiesPrinted": row.get("copies_printed"),
         }
         if queue_position is not None and api_status == "pending":
             out["queuePosition"] = queue_position
+        return out
+
+    def _job_queue_item_dict(row: dict[str, Any], *, queue_position: int | None = None) -> dict[str, Any]:
+        return _job_base_dict(row, queue_position=queue_position)
+
+    def _job_status_dict(row: dict[str, Any], *, queue_position: int | None = None) -> dict[str, Any]:
+        out = _job_base_dict(row, queue_position=queue_position)
+        result_payload = _job_result_payload(row, str(out["status"]))
         if result_payload is not None:
             out["result"] = result_payload
         return out
@@ -1490,11 +1498,11 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if running_id is not None:
             row = provider.print_history_store.get_by_id(running_id)
             if row is not None:
-                active_row = _job_public_dict(row)
+                active_row = _job_queue_item_dict(row)
         for idx, jid in enumerate(pending_ids):
             row = provider.print_history_store.get_by_id(jid)
             if row is not None:
-                pending_rows.append(_job_public_dict(row, queue_position=idx + (2 if running_id else 1)))
+                pending_rows.append(_job_queue_item_dict(row, queue_position=idx + (2 if running_id else 1)))
         return api_success(
             message="Command job queue loaded.",
             data={"active": active_row, "pending": pending_rows},
@@ -1513,10 +1521,17 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         if row is None:
             return api_error("Command job not found.", error_code="CMD_JOB_NOT_FOUND", status_code=404)
         position = _compute_queue_position(job_uuid)
-        return api_success(
-            message="Command job status loaded.",
-            data=_job_public_dict(row, queue_position=position),
-        )
+        data = _job_status_dict(row, queue_position=position)
+        api_status = str(data.get("status") or "")
+        if api_status == "failed":
+            err_msg, err_code = _job_failure_parts(row)
+            return api_job_status(
+                data,
+                status=api_status,
+                error_message=str(err_msg) if err_msg else None,
+                error_code=err_code,
+            )
+        return api_job_status(data, status=api_status)
 
     @app.post("/api/cmd/print")
     def print_svg() -> tuple[Response, int]:

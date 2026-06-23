@@ -45,6 +45,28 @@ function parseApiResponse(response) {
   });
 }
 
+function parseJobStatusResponse(response) {
+  return response.json().catch(() => {
+    throw new Error(`Invalid API response (${response.status})`);
+  }).then((payload) => {
+    if (!response.ok) {
+      let message = payload?.message || `Request failed (${response.status})`;
+      const code = payload?.errorCode;
+      if (code !== null && code !== undefined && code !== "") {
+        message = `[#${code}] ${message}`;
+      }
+      throw new Error(message);
+    }
+    const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
+    return {
+      success: payload?.success !== false,
+      message: payload?.message || "",
+      errorCode: payload?.errorCode ?? null,
+      data,
+    };
+  });
+}
+
 function buildAuthHeaders() {
   const connection = loadConnectionSettings();
   const apiKey = String(connection.apiKey || "").trim();
@@ -63,6 +85,11 @@ async function apiFetch(url, options = {}) {
 async function apiGet(url) {
   const response = await apiFetch(url, { method: "GET" });
   return parseApiResponse(response);
+}
+
+async function apiGetJobStatus(url) {
+  const response = await apiFetch(url, { method: "GET" });
+  return parseJobStatusResponse(response);
 }
 
 async function apiPostJson(url, body = {}) {

@@ -385,8 +385,8 @@ label.radio-inline {
 }
 
 .dashboard-row-secondary {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   margin-top: 16px;
 }
@@ -398,6 +398,8 @@ label.radio-inline {
 
 .job-queue-list {
   min-height: 72px;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .job-queue-item {

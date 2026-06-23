@@ -47,7 +47,7 @@ Most endpoints return **JSON** with this shape:
 | ----------- | ------- |
 | `success`   | `true` / `false` |
 | `message`   | Human-readable summary |
-| `data`      | Payload object/array, or `null` on many errors |
+| `data`      | Payload object/array, or `null` on many errors (failed job polls may include slim job in `data`) |
 | `errorCode` | Integer machine code on failure (`null` on success); legacy string tokens are folded into `message` as `[TOKEN] ...`. See [API_REFERENCE.md](API_REFERENCE.md#api-error-code-registry). |
 | `details`   | Extra context (optional) |
 
@@ -89,9 +89,9 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | ------ | ---- | ------------- | -------------------- | -------------------------- |
 | GET | `/api/cmd/health` | — | 200 | `printerConnected`, `printerBusy`, `captureResetConfigured` |
 | GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
-| GET | `/api/cmd/jobs/queue` | — | 200 | `{ "active": job or null, "pending": [ … ] }` — **HTTP method must be GET** |
-| GET | `/api/cmd/jobs/{jobId}` | — | 200 | Poll job status — **HTTP method must be GET (POST returns 405)** |
-| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 | Async accept: `jobId`, `jobType`, `status` (`pending`), `queuePosition` — poll job status until `finished` |
+| GET | `/api/cmd/jobs/queue` | — | 200 | `{ "active": job or null, "pending": [ … ] }` — slim items: `jobId`, `jobType`, `status`, `queuePosition`, `svgFileName` — **HTTP method must be GET** |
+| GET | `/api/cmd/jobs/{jobId}` | — | 200 | Poll job status — **HTTP method must be GET (POST returns 405)**. Terminal: `completed` / `failed` / `stopped`. Failed jobs: HTTP 200 + `success: false` + envelope `errorCode` |
+| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 | Async accept: `jobId`, `jobType`, `status` (`pending`), `queuePosition` — poll until terminal status |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 | Same async accept shape; `jobType` is `bulk` |
 | POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`bulk_stop`), `status`, `queuePosition` |
 | POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`void`), `status`, `queuePosition` |
@@ -104,6 +104,14 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | `EMPTY_SVG` / `SVG_REQUIRED` / `PRINT_VALIDATION_ERROR` / `PRINT_RUNTIME_ERROR` | 400 |
 | `PRINT_FAILED` / `BULK_PRINT_FAILED` | 500 |
 | `UNAUTHORIZED` | 401 |
+
+### Polling job status (`GET /api/cmd/jobs/{jobId}`)
+
+- **Endpoint error** (bad UUID, unknown job): HTTP `404`, `data: null`, `errorCode` `1043` (`CMD_JOB_NOT_FOUND`).
+- **Job execution failed** (e.g. bulk_stop with no bulk running): HTTP **`200`**, `success: false`, top-level `message` / `errorCode`, slim job still in `data` with `status: "failed"`.
+- **Job succeeded or stopped**: HTTP `200`, `success: true`, `data.status` is `completed` or `stopped`; optional `result` in `data`.
+
+Do not treat HTTP 200 + `success: false` on job poll as a transport error — it means the job finished with a failure.
 
 ---
 

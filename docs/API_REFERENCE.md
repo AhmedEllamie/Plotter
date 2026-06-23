@@ -359,7 +359,7 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 | `queuePosition` | `integer` | 1-based position in the FIFO command queue.              |
 
 
-Poll **`GET /api/cmd/jobs/{jobId}`** until `status` is `finished`; then read `outcome` (`completed`, `failed`, or `stopped`) and optional `result` payload.
+Poll **`GET /api/cmd/jobs/{jobId}`** until `status` is a terminal value (`completed`, `failed`, or `stopped`). On success, read optional `result` in `data`. On failure, read top-level `message` and `errorCode` (`success: false`, HTTP still `200`). Live bulk copy counts during a run come from **`GET /api/cmd/status`** (`bulk_printed_count`, `bulk_requested_total`), not from the queue snapshot.
 
 
 **Error `errorCode`**
@@ -427,7 +427,7 @@ Same `**multipart/form-data**` as single print (**`svg`** / **`file`** only — 
 
 `copies` sources (first hit wins in code): JSON body `copies`, form `copies`, query `copies`.
 
-**Success `data` (HTTP `200` — job accepted):** Same async accept shape as single print; `jobType` is `"bulk"`. Poll `GET /api/cmd/jobs/{jobId}` for `bulkProgress` and slim `result` when finished.
+**Success `data` (HTTP `200` — job accepted):** Same async accept shape as single print; `jobType` is `"bulk"`. Poll `GET /api/cmd/jobs/{jobId}` for terminal status and slim `result` when `status` is `completed` or `stopped`. Use `GET /api/cmd/status` for live bulk progress while running.
 
 **Example request**
 
@@ -458,7 +458,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
 
 ### `GET /api/cmd/jobs/queue`
 
-Returns the server-wide FIFO command queue (print, bulk, void, bulk_stop).
+Returns the server-wide FIFO command queue (print, bulk, void, bulk_stop). Only **active** and **pending** jobs appear (no completed/failed history).
 
 **Success `data`**
 
@@ -467,26 +467,80 @@ Returns the server-wide FIFO command queue (print, bulk, void, bulk_stop).
 | `active`  | `object` | Currently running job snapshot, or `null`.       |
 | `pending` | `array`  | Pending jobs in order (each same shape as below). |
 
+**Job object shape (`active` / each `pending` item)**
+
+| Field           | Type      | Description                                      |
+| --------------- | --------- | ------------------------------------------------ |
+| `jobId`         | `string`  | UUID.                                            |
+| `jobType`       | `string`  | `print`, `bulk`, `void`, or `bulk_stop`.         |
+| `status`        | `string`  | `pending` or `running` (for `active`).           |
+| `queuePosition` | `integer` | Present when `status` is `pending`.              |
+| `svgFileName`   | `string`  | Original SVG filename when applicable, else `null`. |
+
 ---
 
 ### `GET /api/cmd/jobs/{job_id}`
 
 Poll async command job status.
 
-**Success `data`**
+**Response envelope**
+
+| Case | HTTP | `success` | Top-level `errorCode` | `data` |
+| ---- | ---- | --------- | --------------------- | ------ |
+| Pending / running / completed / stopped | 200 | `true` | `null` | Slim job object (below) |
+| Job execution failed | 200 | `false` | Numeric code | Slim job object with `status: "failed"` |
+| Job not found | 404 | `false` | `1043` (`CMD_JOB_NOT_FOUND`) | `null` |
+
+On failed jobs, **`message`** and **`errorCode`** are at the envelope level — not inside `data`.
+
+**Success `data` (slim job object)**
 
 | Field           | Type      | Description                                                       |
 | --------------- | --------- | ----------------------------------------------------------------- |
 | `jobId`         | `string`  | UUID.                                                             |
 | `jobType`       | `string`  | `print`, `bulk`, `void`, or `bulk_stop`.                          |
-| `status`        | `string`  | `pending`, `running`, or `finished`.                              |
-| `outcome`       | `string`  | When finished: `completed`, `failed`, or `stopped`; else `null`.  |
+| `status`        | `string`  | `pending`, `running`, `completed`, `failed`, or `stopped`.        |
 | `queuePosition` | `integer` | Present when `status` is `pending`.                               |
-| `result`        | `object`  | When finished successfully, slim print/bulk/stop payload.         |
-| `errorMessage`  | `string`  | When failed.                                                      |
-| `errorCode`     | `string`  | When failed (e.g. `PRINTER_NOT_BUSY` on bulk_stop).               |
+| `svgFileName`   | `string`  | Original SVG filename when applicable, else `null`.                 |
+| `result`        | `object`  | Present when `status` is `completed` or `stopped` (slim payload). |
 
-**Error `errorCode`:** `1043` (`CMD_JOB_NOT_FOUND`) on HTTP `404`.
+**Example — completed print job** `200`
+
+```json
+{
+  "success": true,
+  "message": "Command job completed.",
+  "errorCode": null,
+  "data": {
+    "jobId": "550e8400-e29b-41d4-a716-446655440000",
+    "jobType": "print",
+    "status": "completed",
+    "svgFileName": "signature.svg",
+    "result": {
+      "commands_sent": 42,
+      "execution_percent": 100.0
+    }
+  }
+}
+```
+
+**Example — failed bulk_stop job** `200`
+
+```json
+{
+  "success": false,
+  "message": "[PRINTER_NOT_BUSY] No active print job to stop.",
+  "errorCode": 1021,
+  "data": {
+    "jobId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "jobType": "bulk_stop",
+    "status": "failed",
+    "svgFileName": null
+  }
+}
+```
+
+**Endpoint error `errorCode`:** `1043` (`CMD_JOB_NOT_FOUND`) on HTTP `404`.
 
 ---
 
@@ -507,7 +561,7 @@ Poll async command job status.
 | `status`        | `string`  | `"pending"`.                                |
 | `queuePosition` | `integer` | Queue position.                             |
 
-When the job runs, it requests graceful bulk stop. If no bulk job is active at execution time, the job finishes with `outcome: failed` and `errorCode: PRINTER_NOT_BUSY`. The **running bulk print job** (separate `jobId`) shows `outcome: stopped` when G-code completes.
+When the job runs, it requests graceful bulk stop. If no bulk job is active at execution time, polling the bulk_stop `jobId` returns HTTP `200` with `success: false`, top-level `errorCode` (e.g. `PRINTER_NOT_BUSY`), and `data.status: "failed"`. The **running bulk print job** (separate `jobId`) shows `status: "stopped"` when G-code completes.
 
 **Example response** `200`
 
@@ -535,7 +589,7 @@ When the job runs, it requests graceful bulk stop. If no bulk job is active at e
 | —        | —    | —    | —        | No body.    |
 
 
-Enqueues a void command in the unified FIFO queue (same queue as print/bulk/stop). Does **not** block until G-code completes. Poll `GET /api/cmd/jobs/{jobId}` for outcome.
+Enqueues a void command in the unified FIFO queue (same queue as print/bulk/stop). Does **not** block until G-code completes. Poll `GET /api/cmd/jobs/{jobId}` until `status` is terminal.
 
 **Success `data` (HTTP `200`)**
 

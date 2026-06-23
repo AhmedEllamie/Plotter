@@ -83,8 +83,8 @@ def _host_ipv4s_for_display() -> str:
 def _job_queue_label(job: dict[str, object]) -> str:
     job_type = str(job.get("jobType") or "print")
     if job_type == "bulk":
-        copies = job.get("copiesRequested", "?")
-        title = f"Bulk ({copies} copies)"
+        svg_name = job.get("svgFileName") or job.get("signature_file_name")
+        title = f"Bulk — {svg_name}" if svg_name else "Bulk"
     elif job_type == "bulk_stop":
         title = "Bulk stop"
     elif job_type == "void":
@@ -96,8 +96,6 @@ def _job_queue_label(job: dict[str, object]) -> str:
         status = "running"
     elif db_status in ("queued", "pending"):
         status = "pending"
-    elif db_status == "finished":
-        status = str(job.get("outcome") or "finished")
     else:
         status = db_status or "unknown"
     return f"{title} — {status}"
@@ -285,12 +283,8 @@ class PenKioskApp:
         errors_panel = self._status_section(parent, "")
         errors_panel.grid_columnconfigure(0, weight=0)
         errors_panel.grid_columnconfigure(1, weight=1)
-        errors_panel.grid_columnconfigure(2, weight=0)
-        errors_panel.grid_columnconfigure(3, weight=1)
         self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
         self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
-        self._grid_cell_key(errors_panel, bg, 0, 2, "Queue")
-        self._grid_cell_value_var(errors_panel, bg, 0, 3, self._queue_lines_var, wraplength=420)
         self._grid_cell_key(errors_panel, bg, 1, 0, "Error message")
         self._api_feedback_message_label = self._grid_cell_value_plain(
             errors_panel,
@@ -299,9 +293,15 @@ class PenKioskApp:
             1,
             font=("Segoe UI", 12),
             initial_fg="#64748b",
-            wraplength=420,
+            wraplength=860,
             columnspan=1,
         )
+
+        queue_panel = self._status_section(parent, "")
+        queue_panel.grid_columnconfigure(0, weight=0)
+        queue_panel.grid_columnconfigure(1, weight=1)
+        self._grid_cell_key(queue_panel, bg, 0, 0, "Queue")
+        self._grid_cell_value_var(queue_panel, bg, 0, 1, self._queue_lines_var, wraplength=860)
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
@@ -694,7 +694,12 @@ class PenKioskApp:
         with urlopen(request, timeout=12) as response:
             body = response.read().decode("utf-8", errors="ignore")
             parsed = json.loads(body) if body else {}
-            if not isinstance(parsed, dict) or parsed.get("success") is False:
+            if not isinstance(parsed, dict):
+                raise RuntimeError(f"Request failed ({response.status})")
+            if parsed.get("success") is False:
+                data = parsed.get("data")
+                if isinstance(data, dict) and data.get("status") == "failed":
+                    return data
                 raise RuntimeError(str(parsed.get("message") or f"Request failed ({response.status})"))
             data = parsed.get("data")
             return data if isinstance(data, dict) else {}
