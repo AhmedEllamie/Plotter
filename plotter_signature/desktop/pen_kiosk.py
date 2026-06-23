@@ -47,39 +47,6 @@ def _plotter_eth_status() -> tuple[str, bool]:
     return ip, _is_plotter_eth_connected(ip)
 
 
-def _host_ipv4s_for_display() -> str:
-    """Non-loopback LAN/Wi-Fi IPs on the kiosk PC (reachable from lab network / laptop)."""
-    seen: set[str] = set()
-    ordered: list[str] = []
-    plotter_iface = _plotter_eth_interface()
-    plotter_ip = _eth_interface_ipv4(plotter_iface)
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            probe.connect(("8.8.8.8", 80))
-            ip = probe.getsockname()[0]
-            if ip and not ip.startswith("127.") and ip != plotter_ip and ip not in seen:
-                seen.add(ip)
-                ordered.append(ip)
-        except OSError:
-            pass
-        finally:
-            probe.close()
-    except OSError:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET, type=socket.SOCK_DGRAM):
-            ip = info[4][0]
-            if ip and not ip.startswith("127.") and ip != plotter_ip and ip not in seen:
-                seen.add(ip)
-                ordered.append(ip)
-    except OSError:
-        pass
-    if not ordered:
-        return "Unavailable"
-    return ", ".join(ordered)
-
-
 def _job_queue_label(job: dict[str, object]) -> str:
     job_type = str(job.get("jobType") or "print")
     if job_type == "bulk":
@@ -142,8 +109,8 @@ class PenKioskApp:
     _INFO_FG_WARN = "#fde68a"
     _INFO_FG_MUTED = "#94a3b8"
     _SWITCH_KNOB_POS = (
-        (8, 12, 56, 32),
-        (80, 12, 128, 32),
+        (4, 6, 42, 24),
+        (54, 6, 92, 24),
     )
 
     def __init__(self, api_base_url: str | None = None) -> None:
@@ -163,7 +130,6 @@ class PenKioskApp:
         self._eth0_connected = False
 
         self._current_ip_var = StringVar(value="Resolving…")
-        self._host_ip_var = StringVar(value="Resolving…")
         self._queue_lines_var = StringVar(value="No active or pending jobs.")
         self._cumulative_distance_value = StringVar(value="0.000 m")
         self._executed_distance_value = StringVar(value="0.000 m")
@@ -191,31 +157,24 @@ class PenKioskApp:
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root_frame = Frame(self._root, bg="#0f172a", padx=24, pady=20)
+        root_frame = Frame(self._root, bg="#0f172a", padx=16, pady=10)
         root_frame.pack(fill=BOTH, expand=True)
 
         switch_row = Frame(root_frame, bg="#0f172a")
-        switch_row.pack(fill=X, pady=(0, 14))
-        Label(
-            switch_row,
-            textvariable=self._mode_label_var,
-            bg="#0f172a",
-            fg="#cbd5e1",
-            font=("Segoe UI", 14, "bold"),
-        ).pack(side=RIGHT)
+        switch_row.pack(fill=X, pady=(0, 6))
         self._switch_canvas = Canvas(
             switch_row,
-            width=140,
-            height=44,
+            width=96,
+            height=28,
             bg="#0f172a",
             highlightthickness=0,
             bd=0,
         )
-        self._switch_canvas.pack(side=RIGHT, padx=(0, 10))
-        self._switch_canvas.create_rectangle(4, 10, 136, 34, outline="#64748b", fill="#1e293b", width=2)
-        self._switch_canvas.create_text(36, 22, text="S", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
-        self._switch_canvas.create_text(104, 22, text="P", fill="#cbd5e1", font=("Segoe UI", 11, "bold"))
-        self._switch_knob = self._switch_canvas.create_oval(8, 12, 56, 32, fill="#e2e8f0", outline="#cbd5e1")
+        self._switch_canvas.pack(side=RIGHT)
+        self._switch_canvas.create_rectangle(2, 6, 94, 24, outline="#64748b", fill="#1e293b", width=1)
+        self._switch_canvas.create_text(24, 15, text="S", fill="#cbd5e1", font=("Segoe UI", 9, "bold"))
+        self._switch_canvas.create_text(72, 15, text="P", fill="#cbd5e1", font=("Segoe UI", 9, "bold"))
+        self._switch_knob = self._switch_canvas.create_oval(4, 6, 42, 24, fill="#e2e8f0", outline="#cbd5e1")
         self._switch_canvas.bind("<Button-1>", self._toggle_cards_event)
 
         cards_container = Frame(root_frame, bg="#0f172a")
@@ -224,8 +183,8 @@ class PenKioskApp:
         self._status_card = Frame(
             cards_container,
             bg="#111827",
-            padx=20,
-            pady=20,
+            padx=14,
+            pady=12,
             highlightbackground="#334155",
             highlightthickness=1,
         )
@@ -245,24 +204,37 @@ class PenKioskApp:
 
     def _build_status_card(self, parent: Frame) -> None:
         bg = "#1e293b"
-        # Outer section titles (Info / Meters / Errors) omitted for small HDMI; row labels kept.
-        info_panel = self._status_section(parent, "")
+        scroll_outer = Frame(parent, bg="#111827")
+        scroll_outer.pack(fill=BOTH, expand=True)
+
+        info_panel = self._status_section(scroll_outer, "")
         self._prepare_status_grid(info_panel)
         r = 0
-        self._grid_cell_key(info_panel, bg, r, 0, "Host IP")
-        self._grid_cell_value_var(info_panel, bg, r, 1, self._host_ip_var, wraplength=340)
+        self._grid_cell_key(info_panel, bg, r, 0, "eth0 IP")
+        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=280)
         self._grid_cell_key(info_panel, bg, r, 2, "Server")
         self._info_server_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
         r += 1
-        self._grid_cell_key(info_panel, bg, r, 0, "eth0 IP")
-        self._grid_cell_value_var(info_panel, bg, r, 1, self._current_ip_var, wraplength=340)
-        self._grid_cell_key(info_panel, bg, r, 2, "eth0")
-        self._info_eth0_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
-        r += 1
-        self._grid_cell_key(info_panel, bg, r, 0, "State")
-        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 0, "eth0")
+        self._info_eth0_label = self._grid_cell_value_plain(info_panel, bg, r, 1)
+        self._grid_cell_key(info_panel, bg, r, 2, "State")
+        self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
 
-        meters_panel = self._status_section(parent, "")
+        queue_panel = self._status_section(scroll_outer, "Job Queue")
+        queue_panel.grid_columnconfigure(0, weight=1)
+        self._queue_label = Label(
+            queue_panel,
+            textvariable=self._queue_lines_var,
+            bg=bg,
+            fg="#f8fafc",
+            font=("Segoe UI", 11, "bold"),
+            anchor="nw",
+            justify="left",
+            wraplength=900,
+        )
+        self._queue_label.pack(fill=X, anchor="nw")
+
+        meters_panel = self._status_section(scroll_outer, "")
         self._prepare_status_grid(meters_panel)
         r = 0
         self._grid_cell_key(meters_panel, bg, r, 0, "Cumulative distance (m)")
@@ -280,7 +252,7 @@ class PenKioskApp:
         self._grid_cell_key(meters_panel, bg, r, 2, "Bulk stop requested")
         self._grid_cell_value_var(meters_panel, bg, r, 3, self._bulk_stop_value)
 
-        errors_panel = self._status_section(parent, "")
+        errors_panel = self._status_section(scroll_outer, "Errors")
         errors_panel.grid_columnconfigure(0, weight=0)
         errors_panel.grid_columnconfigure(1, weight=1)
         self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
@@ -293,29 +265,23 @@ class PenKioskApp:
             1,
             font=("Segoe UI", 12),
             initial_fg="#64748b",
-            wraplength=860,
+            wraplength=900,
             columnspan=1,
         )
 
-        queue_panel = self._status_section(parent, "")
-        queue_panel.grid_columnconfigure(0, weight=0)
-        queue_panel.grid_columnconfigure(1, weight=1)
-        self._grid_cell_key(queue_panel, bg, 0, 0, "Queue")
-        self._grid_cell_value_var(queue_panel, bg, 0, 1, self._queue_lines_var, wraplength=860)
-
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
-        block.pack(fill=X, pady=(0, 10))
+        block.pack(fill=X, pady=(0, 6))
         if title.strip():
             Label(
                 block,
                 text=title,
                 bg="#111827",
                 fg="#94a3b8",
-                font=("Segoe UI", 12, "bold"),
-            ).pack(anchor="w", pady=(0, 8))
-        inner = Frame(block, bg="#1e293b", padx=18, pady=14)
-        inner.pack(fill=BOTH, expand=True)
+                font=("Segoe UI", 10, "bold"),
+            ).pack(anchor="w", pady=(0, 4))
+        inner = Frame(block, bg="#1e293b", padx=12, pady=8)
+        inner.pack(fill=X)
         return inner
 
     def _prepare_status_grid(self, inner: Frame) -> None:
@@ -503,7 +469,7 @@ class PenKioskApp:
             self._active_card_idx = (self._active_card_idx + 1) % 2
             self._apply_active_card()
             return
-        if mx < 70:
+        if mx < 48:
             self._active_card_idx = 0
         else:
             self._active_card_idx = 1
@@ -528,7 +494,15 @@ class PenKioskApp:
 
     def _refresh_job_queue_now(self) -> None:
         try:
-            queue_data = self._api_get("/api/cmd/jobs/queue")
+            parsed = self._api_get_json("/api/cmd/jobs/queue")
+            if parsed.get("success") is False:
+                message = str(parsed.get("message") or "Queue request failed")
+                self._queue_lines_var.set(message[:800])
+                return
+            queue_data = parsed.get("data")
+            if not isinstance(queue_data, dict):
+                self._queue_lines_var.set("Queue unavailable")
+                return
         except HTTPError as ex:
             if ex.code == 404:
                 self._queue_lines_var.set("Queue API missing (update server)")
@@ -556,7 +530,6 @@ class PenKioskApp:
         ip, connected = _plotter_eth_status()
         self._eth0_connected = connected
         self._current_ip_var.set(ip)
-        self._host_ip_var.set(_host_ipv4s_for_display())
         ok_fg, bad_fg = self._INFO_FG_OK, self._INFO_FG_BAD
         self._set_key_value_cell(
             self._info_eth0_label,
@@ -685,7 +658,7 @@ class PenKioskApp:
             data = parsed.get("data")
             return data if isinstance(data, dict) else {}
 
-    def _api_get(self, path: str) -> dict[str, object]:
+    def _api_get_json(self, path: str) -> dict[str, object]:
         request = Request(
             url=f"{self._api_base_url}{path}",
             headers=self._request_headers(json_body=False),
@@ -696,13 +669,17 @@ class PenKioskApp:
             parsed = json.loads(body) if body else {}
             if not isinstance(parsed, dict):
                 raise RuntimeError(f"Request failed ({response.status})")
-            if parsed.get("success") is False:
-                data = parsed.get("data")
-                if isinstance(data, dict) and data.get("status") == "failed":
-                    return data
-                raise RuntimeError(str(parsed.get("message") or f"Request failed ({response.status})"))
+            return parsed
+
+    def _api_get(self, path: str) -> dict[str, object]:
+        parsed = self._api_get_json(path)
+        if parsed.get("success") is False:
             data = parsed.get("data")
-            return data if isinstance(data, dict) else {}
+            if isinstance(data, dict) and data.get("status") == "failed":
+                return data
+            raise RuntimeError(str(parsed.get("message") or "Request failed"))
+        data = parsed.get("data")
+        return data if isinstance(data, dict) else {}
 
     def _resolve_api_key(self) -> str:
         explicit = os.getenv("PLOTTER_API_KEY_FILE")
