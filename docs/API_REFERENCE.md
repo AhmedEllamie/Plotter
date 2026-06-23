@@ -25,7 +25,10 @@ All JSON success bodies wrap payloads in the [standard envelope](#global-envelop
 - [Static HTML](#static-html)
 - [Group: Command APIs](#group-command-apis-apicmd)
 - [Group: Config APIs](#group-config-apis-apiconfig)
+  - [Config — UI profile](#config--ui-profile)
+  - [Config — Scanner proxy](#config--scanner-proxy)
   - [Config — Capture](#config--capture)
+  - [Config — Print history & approval logs](#config--print-history--approval-logs)
 - [Shared schemas](#shared-schemas)
 - [API index (endpoints in this document)](#api-index-endpoints-in-this-document)
 
@@ -1200,9 +1203,11 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 **Runtime config**
 
 
-| Method | Path          |
-| ------ | ------------- |
-| `GET`  | `/api/config` |
+| Method | Path                   |
+| ------ | ---------------------- |
+| `GET`  | `/api/config`          |
+| `GET`  | `/api/config/ui-profile` |
+| `POST` | `/api/config/ui-profile` |
 
 
 **Pen maintenance**
@@ -1242,7 +1247,9 @@ Quick checklist of every HTTP surface **documented above** (method + path). All 
 | `GET`  | `/api/config/print-history` |
 
 
-**Total:** 2 static routes + Flask JSON/binary API routes under `/api/`* (see tables above).
+**Note:** scanner orchestration compatibility routes inside `app.py` (`/api/config/scanner/capture/start`, `/status`, `/result`, `/run`) are intentionally disabled unless explicitly re-registered in code.
+
+**Total:** 2 static routes + active Flask JSON/binary API routes under `/api/`* (see tables above).
 
 ---
 
