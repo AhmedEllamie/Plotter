@@ -7,7 +7,7 @@ import socket
 import struct
 import threading
 from pathlib import Path
-from tkinter import BOTH, E, LEFT, RIGHT, W, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, messagebox
+from tkinter import BOTH, E, LEFT, RIGHT, W, X, Button, Canvas, Entry, Frame, Label, StringVar, Tk, Toplevel, messagebox
 
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -139,13 +139,12 @@ class PenKioskApp:
         self._bulk_stop_value = StringVar(value="No")
         self._max_pen_distance_var = StringVar(value="")
         self._inline_error_var = StringVar(value="")
-        self._api_feedback_code_var = StringVar(value="")
-        self._api_feedback_message_var = StringVar(value="")
-        self._error_code_label: Label | None = None
-        self._api_feedback_message_label: Label | None = None
         self._info_server_label: Label | None = None
         self._info_eth0_label: Label | None = None
         self._info_state_label: Label | None = None
+        self._queue_label: Label | None = None
+        self._active_error_dialog: Toplevel | None = None
+        self._acknowledged_error_key: str | None = None
 
         self._mode_label_var = StringVar(value="Status")
         self._status_card: Frame | None = None
@@ -220,20 +219,6 @@ class PenKioskApp:
         self._grid_cell_key(info_panel, bg, r, 2, "State")
         self._info_state_label = self._grid_cell_value_plain(info_panel, bg, r, 3)
 
-        queue_panel = self._status_section(scroll_outer, "Job Queue")
-        queue_panel.grid_columnconfigure(0, weight=1)
-        self._queue_label = Label(
-            queue_panel,
-            textvariable=self._queue_lines_var,
-            bg=bg,
-            fg="#f8fafc",
-            font=("Segoe UI", 11, "bold"),
-            anchor="nw",
-            justify="left",
-            wraplength=900,
-        )
-        self._queue_label.pack(fill=X, anchor="nw")
-
         meters_panel = self._status_section(scroll_outer, "")
         self._prepare_status_grid(meters_panel)
         r = 0
@@ -252,22 +237,18 @@ class PenKioskApp:
         self._grid_cell_key(meters_panel, bg, r, 2, "Bulk stop requested")
         self._grid_cell_value_var(meters_panel, bg, r, 3, self._bulk_stop_value)
 
-        errors_panel = self._status_section(scroll_outer, "Errors")
-        errors_panel.grid_columnconfigure(0, weight=0)
-        errors_panel.grid_columnconfigure(1, weight=1)
-        self._grid_cell_key(errors_panel, bg, 0, 0, "Error code")
-        self._error_code_label = self._grid_cell_value_plain(errors_panel, bg, 0, 1)
-        self._grid_cell_key(errors_panel, bg, 1, 0, "Error message")
-        self._api_feedback_message_label = self._grid_cell_value_plain(
-            errors_panel,
-            bg,
-            1,
-            1,
-            font=("Segoe UI", 12),
-            initial_fg="#64748b",
+        queue_panel = self._status_section(scroll_outer, "Job Queue")
+        self._queue_label = Label(
+            queue_panel,
+            textvariable=self._queue_lines_var,
+            bg=bg,
+            fg="#f8fafc",
+            font=("Segoe UI", 11, "bold"),
+            anchor="nw",
+            justify="left",
             wraplength=900,
-            columnspan=1,
         )
+        self._queue_label.pack(fill=X, anchor="nw")
 
     def _status_section(self, parent: Frame, title: str) -> Frame:
         block = Frame(parent, bg="#111827")
@@ -484,13 +465,132 @@ class PenKioskApp:
             return
         label.configure(text=text, fg=fg)
 
+    def _error_dialog_key(self, message: str, error_code: str | None) -> str:
+        code = (error_code or "").strip()
+        text = (message or "").strip()[:800]
+        return f"{code}|{text}"
+
+    def _clear_error_state(self) -> None:
+        self._acknowledged_error_key = None
+
+    def _error_dialog_is_open(self) -> bool:
+        if self._active_error_dialog is None:
+            return False
+        try:
+            return bool(self._active_error_dialog.winfo_exists())
+        except Exception:
+            self._active_error_dialog = None
+            return False
+
+    def _show_error_dialog(self, message: str, error_code: str | None = None) -> None:
+        trimmed = (message or "").strip()[:800]
+        if not trimmed:
+            return
+        code_plain = (error_code or "").strip()
+        key = self._error_dialog_key(trimmed, code_plain or None)
+        if key == self._acknowledged_error_key:
+            return
+        if self._error_dialog_is_open():
+            return
+
+        dialog = Toplevel(self._root)
+        dialog.title("Error")
+        dialog.configure(bg="#0f172a")
+        dialog.transient(self._root)
+        dialog.grab_set()
+        dialog.attributes("-topmost", True)
+        dialog.resizable(False, False)
+        self._active_error_dialog = dialog
+
+        shell = Frame(dialog, bg="#0f172a", padx=24, pady=20)
+        shell.pack(fill=BOTH, expand=True)
+
+        Label(
+            shell,
+            text="An error occurred",
+            bg="#0f172a",
+            fg="#fecaca",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w", pady=(0, 14))
+
+        details = Frame(shell, bg="#1e293b", padx=16, pady=14)
+        details.pack(fill=X, pady=(0, 18))
+
+        Label(
+            details,
+            text="Error code",
+            bg="#1e293b",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+        ).pack(anchor="w")
+        Label(
+            details,
+            text=code_plain if code_plain else "—",
+            bg="#1e293b",
+            fg="#fecaca",
+            font=("Segoe UI", 14, "bold"),
+            anchor="w",
+        ).pack(anchor="w", pady=(4, 12))
+
+        Label(
+            details,
+            text="Error message",
+            bg="#1e293b",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+        ).pack(anchor="w")
+        Label(
+            details,
+            text=trimmed,
+            bg="#1e293b",
+            fg="#f8fafc",
+            font=("Segoe UI", 12),
+            anchor="w",
+            justify="left",
+            wraplength=520,
+        ).pack(anchor="w", pady=(4, 0))
+
+        def dismiss() -> None:
+            self._acknowledged_error_key = key
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            try:
+                dialog.destroy()
+            except Exception:
+                pass
+            self._active_error_dialog = None
+
+        Button(
+            shell,
+            text="OK",
+            command=dismiss,
+            bg="#dc2626",
+            fg="#ffffff",
+            activebackground="#b91c1c",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=36,
+            pady=12,
+            font=("Segoe UI", 14, "bold"),
+            cursor="hand2",
+        ).pack(fill=X)
+
+        dialog.update_idletasks()
+        width = max(dialog.winfo_reqwidth(), 560)
+        height = max(dialog.winfo_reqheight(), 280)
+        screen_w = dialog.winfo_screenwidth()
+        screen_h = dialog.winfo_screenheight()
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        dialog.protocol("WM_DELETE_WINDOW", dismiss)
+
     def _clear_error_panel(self) -> None:
-        self._api_feedback_code_var.set("")
-        self._api_feedback_message_var.set("")
-        if self._error_code_label is not None:
-            self._error_code_label.configure(text="—", fg="#64748b")
-        if self._api_feedback_message_label is not None:
-            self._api_feedback_message_label.configure(text="—", fg="#64748b")
+        self._clear_error_state()
 
     def _refresh_job_queue_now(self) -> None:
         try:
@@ -722,27 +822,8 @@ class PenKioskApp:
         threading.Thread(target=worker, daemon=True).start()
 
     def _append_feedback(self, message: str, is_error: bool = False, error_code: str | None = None) -> None:
-        trimmed = (message or "").strip()[:800]
-        code_plain = (error_code or "").strip() if is_error else ""
-        self._api_feedback_code_var.set(code_plain)
-        self._api_feedback_message_var.set(trimmed)
-
-        if self._error_code_label is not None:
-            code_display = code_plain if code_plain else "—"
-            self._error_code_label.configure(
-                text=code_display,
-                fg="#fecaca" if is_error and code_plain else "#64748b",
-            )
-
-        if self._api_feedback_message_label is not None:
-            msg_display = trimmed if trimmed else "—"
-            if is_error:
-                self._api_feedback_message_label.configure(text=msg_display, fg="#fecaca")
-            else:
-                self._api_feedback_message_label.configure(
-                    text=msg_display,
-                    fg="#86efac" if trimmed else "#64748b",
-                )
+        if is_error:
+            self._show_error_dialog(message, error_code)
 
     def _set_max_pen_distance(self) -> None:
         raw_value = self._max_pen_distance_var.get().strip()
