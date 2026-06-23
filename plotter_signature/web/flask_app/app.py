@@ -319,6 +319,8 @@ class _CommandJob:
     svg_file_name: str = ""
     print_request_dict: dict[str, Any] | None = None
     copies: int = 1
+    target_bulk_job_id: UUID | None = None
+    stop_applied_at_accept: bool = False
 
 
 _NON_SVG_JOB_SHA = "0" * 64
@@ -658,6 +660,8 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     command_queue: queue.Queue[_CommandJob] = queue.Queue()
     command_queue_lock = threading.Lock()
     pending_job_ids: list[UUID] = []
+    cancelled_job_ids: set[UUID] = set()
+    graceful_stop_bulk_job_ids: set[UUID] = set()
     running_job_holder: dict[str, UUID | None] = {"id": None}
     active_history_job_holder: dict[str, UUID | None] = {"id": None}
     command_worker_lock = threading.Lock()
@@ -674,6 +678,65 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return order.index(job_id) + 1
         except ValueError:
             return None
+
+    def _command_job_order_locked() -> list[UUID]:
+        order: list[UUID] = []
+        running_id = running_job_holder.get("id")
+        if running_id is not None:
+            order.append(running_id)
+        order.extend(pending_job_ids)
+        return order
+
+    def _is_bulk_job_id(job_id: UUID) -> bool:
+        row = provider.print_history_store.get_by_id(job_id)
+        return row is not None and str(row.get("job_type") or "") == "bulk"
+
+    def _resolve_bulk_stop_target(target_job_id: UUID | None) -> UUID | None:
+        with command_queue_lock:
+            order = _command_job_order_locked()
+        bulk_ids = [jid for jid in order if _is_bulk_job_id(jid)]
+        if target_job_id is not None:
+            return target_job_id if target_job_id in bulk_ids else None
+        return bulk_ids[0] if bulk_ids else None
+
+    def _parse_bulk_stop_target_job_id(body: dict[str, Any] | None) -> UUID | None:
+        if not body:
+            return None
+        raw = body.get("targetJobId")
+        if raw is None or raw == "":
+            return None
+        try:
+            return UUID(str(raw).strip())
+        except ValueError as ex:
+            raise ValueError("Invalid targetJobId.") from ex
+
+    def _apply_bulk_stop_at_accept(target_bulk_id: UUID) -> bool:
+        with command_queue_lock:
+            running_id = running_job_holder.get("id")
+            is_running_target = running_id == target_bulk_id
+            is_pending_target = target_bulk_id in pending_job_ids
+
+        if is_running_target:
+            if provider.printer_service.stop_bulk_print():
+                runtime_state.set_bulk_graceful_stop_ack(True)
+                return True
+            with command_queue_lock:
+                graceful_stop_bulk_job_ids.add(target_bulk_id)
+            return True
+
+        if is_pending_target:
+            with command_queue_lock:
+                cancelled_job_ids.add(target_bulk_id)
+                if target_bulk_id in pending_job_ids:
+                    pending_job_ids.remove(target_bulk_id)
+            provider.print_history_store.update_completed(
+                target_bulk_id,
+                status="stopped",
+                error_message="Bulk stop requested before start",
+            )
+            return True
+
+        return False
 
     def _job_db_status_to_api(db_status: str) -> str:
         mapping = {
@@ -748,7 +811,18 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             print_request = _build_print_request(job.print_request_dict or {})
             gcode = _convert_svg(job.svg_payload or b"", print_request)
             if job.kind == "bulk":
-                print_result = _run_async(provider.printer_service.bulk_print(gcode, job.copies))
+                request_graceful_stop = False
+                with command_queue_lock:
+                    if job.job_id in graceful_stop_bulk_job_ids:
+                        graceful_stop_bulk_job_ids.discard(job.job_id)
+                        request_graceful_stop = True
+                print_result = _run_async(
+                    provider.printer_service.bulk_print(
+                        gcode,
+                        job.copies,
+                        request_graceful_stop=request_graceful_stop,
+                    )
+                )
                 copies_printed = int(print_result.copies or 0)
                 final_status = "stopped" if copies_printed < job.copies else "completed"
                 data = {
@@ -794,27 +868,57 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def _execute_bulk_stop_job(job: _CommandJob) -> None:
         provider.print_history_store.update_started(job.job_id)
         try:
-            stop_requested = provider.printer_service.stop_bulk_print()
-            if not stop_requested:
+            payload: dict[str, Any] = {}
+            if job.target_bulk_job_id is not None:
+                payload["targetJobId"] = str(job.target_bulk_job_id)
+            payload["status"] = _slim_bulk_stop_status_payload(provider, runtime_state)
+
+            if job.stop_applied_at_accept:
                 provider.print_history_store.update_completed(
                     job.job_id,
-                    status="failed",
-                    error_message="No active print job to stop.",
-                    result_json={"errorCode": "PRINTER_NOT_BUSY"},
+                    status="completed",
+                    result_json={"payload": payload},
                 )
                 return
-            runtime_state.set_bulk_graceful_stop_ack(True)
-            data = _apply_print_stop_side_effects()
-            data["status"] = _slim_bulk_stop_status_payload(provider, runtime_state)
+
+            target = job.target_bulk_job_id
+            if target is not None:
+                with command_queue_lock:
+                    running_id = running_job_holder.get("id")
+                if running_id == target and provider.printer_service.stop_bulk_print():
+                    runtime_state.set_bulk_graceful_stop_ack(True)
+                    provider.print_history_store.update_completed(
+                        job.job_id,
+                        status="completed",
+                        result_json={"payload": payload},
+                    )
+                    return
+
+                row = provider.print_history_store.get_by_id(target)
+                if row is not None and str(row.get("status") or "") in ("stopped", "completed", "failed"):
+                    provider.print_history_store.update_completed(
+                        job.job_id,
+                        status="completed",
+                        result_json={"payload": payload},
+                    )
+                    return
+
             provider.print_history_store.update_completed(
                 job.job_id,
-                status="completed",
-                result_json={"payload": data},
+                status="failed",
+                error_message="No active print job to stop.",
+                result_json={"errorCode": "PRINTER_NOT_BUSY"},
             )
         except Exception as ex:
             provider.print_history_store.update_completed(job.job_id, status="failed", error_message=str(ex))
 
     def _execute_command_job(job: _CommandJob) -> None:
+        with command_queue_lock:
+            was_cancelled = job.job_id in cancelled_job_ids
+            if was_cancelled:
+                cancelled_job_ids.discard(job.job_id)
+        if was_cancelled:
+            return
         if job.kind in ("print", "bulk"):
             _execute_print_job(job)
         elif job.kind == "void":
@@ -911,6 +1015,45 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             pending_job_ids.append(job_uuid)
         command_queue.put(job)
         return _enqueue_command_response(job_uuid, kind)
+
+    def _enqueue_bulk_stop_command() -> tuple[Response, int]:
+        body = request.get_json(silent=True)
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            return api_error("Invalid JSON body.", error_code="PRINT_VALIDATION_ERROR", status_code=400)
+
+        try:
+            explicit_target = _parse_bulk_stop_target_job_id(body)
+        except ValueError as ex:
+            return api_error(str(ex), error_code="PRINT_VALIDATION_ERROR", status_code=400)
+
+        target_bulk_id = _resolve_bulk_stop_target(explicit_target)
+        if target_bulk_id is None:
+            return api_error(
+                "No bulk print job to stop.",
+                error_code="PRINTER_NOT_BUSY",
+                status_code=409,
+            )
+
+        stop_applied = _apply_bulk_stop_at_accept(target_bulk_id)
+
+        job_uuid = provider.print_history_store.insert_queued(
+            job_type="bulk_stop",
+            signature_file_name="",
+            signature_sha256=_NON_SVG_JOB_SHA,
+            copies_requested=1,
+        )
+        job = _CommandJob(
+            job_id=job_uuid,
+            kind="bulk_stop",
+            target_bulk_job_id=target_bulk_id,
+            stop_applied_at_accept=stop_applied,
+        )
+        with command_queue_lock:
+            pending_job_ids.append(job_uuid)
+        command_queue.put(job)
+        return _enqueue_command_response(job_uuid, "bulk_stop")
 
     def _void_queue_depth() -> int:
         depth = 0
@@ -1612,7 +1755,7 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             _ensure_connected(provider)
         except RuntimeError as ex:
             return api_error(str(ex), error_code="PRINTER_STATE_ERROR", status_code=409)
-        return _enqueue_simple_command("bulk_stop")
+        return _enqueue_bulk_stop_command()
 
     @app.post("/api/cmd/void")
     def void_print() -> tuple[Response, int]:

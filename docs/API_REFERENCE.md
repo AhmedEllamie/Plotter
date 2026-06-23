@@ -546,22 +546,56 @@ On failed jobs, **`message`** and **`errorCode`** are at the envelope level — 
 
 ### `POST /api/cmd/bulk/stop`
 
+Optional JSON body. Stop takes effect **immediately at accept** (not when the bulk_stop job reaches the front of the FIFO queue).
 
 | Location | Name | Type | Required | Description |
 | -------- | ---- | ---- | -------- | ----------- |
-| —        | —    | —    | —        | No body.    |
+| Body | `targetJobId` | `string` (UUID) | No | Bulk print job to stop. Omit → first bulk in queue order (running bulk first, else first pending bulk). |
 
+**Behavior at accept**
+
+| Situation | Effect |
+| --------- | ------ |
+| Target bulk is **running** (e.g. copy 5/10) | Graceful stop armed immediately; current copy finishes, remaining copies do not start |
+| Target bulk is **pending** in queue | Cancelled immediately (`status: stopped`); worker skips it when dequeued |
+| Current job is **single print** | Unaffected; stop applies only to the resolved bulk target |
+| No matching bulk | HTTP **409** + `PRINTER_NOT_BUSY` (not enqueued) |
 
 **Success `data` (HTTP `200` — job accepted)**
 
 | Field           | Type      | Description                                 |
 | --------------- | --------- | ------------------------------------------- |
-| `jobId`         | `string`  | UUID; poll until finished.                  |
+| `jobId`         | `string`  | UUID of the bulk_stop job; poll until finished. |
 | `jobType`       | `string`  | `"bulk_stop"`.                              |
 | `status`        | `string`  | `"pending"`.                                |
-| `queuePosition` | `integer` | Queue position.                             |
+| `queuePosition` | `integer` | Queue position of the bulk_stop job.        |
 
-When the job runs, it requests graceful bulk stop. If no bulk job is active at execution time, polling the bulk_stop `jobId` returns HTTP `200` with `success: false`, top-level `errorCode` (e.g. `PRINTER_NOT_BUSY`), and `data.status: "failed"`. The **running bulk print job** (separate `jobId`) shows `status: "stopped"` when G-code completes.
+The bulk_stop worker job completes later for audit; stop side effects are already applied at accept. Poll the **bulk print** `jobId` for `status: stopped` when G-code finishes the current copy.
+
+**Error `errorCode`**
+
+| Code | Legacy token | HTTP | When |
+| ---- | ------------ | ---- | ---- |
+| 1021 | `PRINTER_NOT_BUSY` | 409 | No running or pending bulk matches `targetJobId` / default resolution |
+| 1019 | `PRINT_VALIDATION_ERROR` | 400 | Invalid `targetJobId` |
+
+**Example request (stop first bulk)**
+
+```bash
+curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
+  -H "X-API-Key: QSCWDVEFBRGN" \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+**Example request (stop specific bulk job)**
+
+```bash
+curl -sS -X POST "http://127.0.0.1:5000/api/cmd/bulk/stop" \
+  -H "X-API-Key: QSCWDVEFBRGN" \
+  -H "Content-Type: application/json" \
+  -d "{\"targetJobId\": \"550e8400-e29b-41d4-a716-446655440000\"}"
+```
 
 **Example response** `200`
 

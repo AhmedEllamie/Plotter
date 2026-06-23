@@ -93,7 +93,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | GET | `/api/cmd/jobs/{jobId}` | — | 200 | Poll job status — **HTTP method must be GET (POST returns 405)**. Terminal: `completed` / `failed` / `stopped`. Failed jobs: HTTP 200 + `success: false` + envelope `errorCode` |
 | POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 | Async accept: `jobId`, `jobType`, `status` (`pending`), `queuePosition` — poll until terminal status |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 | Same async accept shape; `jobType` is `bulk` |
-| POST | `/api/cmd/bulk/stop` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`bulk_stop`), `status`, `queuePosition` |
+| POST | `/api/cmd/bulk/stop` | JSON `{}` or `{ "targetJobId": "<bulk-uuid>" }` optional | 200 | Immediate stop at accept; async accept: `jobId`, `jobType` (`bulk_stop`), `status`, `queuePosition`. **409** if no bulk to stop. |
 | POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`void`), `status`, `queuePosition` |
 
 ### Common command error codes (non-exhaustive)
@@ -101,6 +101,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | `errorCode` | Typical HTTP |
 | ----------- | ------------ |
 | `PRINTER_STATE_ERROR` | 409 (e.g. not connected for print) |
+| `PRINTER_NOT_BUSY` | 409 (bulk/stop: no matching bulk at accept) |
 | `EMPTY_SVG` / `SVG_REQUIRED` / `PRINT_VALIDATION_ERROR` / `PRINT_RUNTIME_ERROR` | 400 |
 | `PRINT_FAILED` / `BULK_PRINT_FAILED` | 500 |
 | `UNAUTHORIZED` | 401 |
@@ -108,7 +109,8 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 ### Polling job status (`GET /api/cmd/jobs/{jobId}`)
 
 - **Endpoint error** (bad UUID, unknown job): HTTP `404`, `data: null`, `errorCode` `1043` (`CMD_JOB_NOT_FOUND`).
-- **Job execution failed** (e.g. bulk_stop with no bulk running): HTTP **`200`**, `success: false`, top-level `message` / `errorCode`, slim job still in `data` with `status: "failed"`.
+- **Job execution failed** (e.g. bulk_stop worker race): HTTP **`200`**, `success: false`, top-level `message` / `errorCode`, slim job still in `data` with `status: "failed"`.
+- **Bulk stop with no bulk target:** HTTP **`409`** + `PRINTER_NOT_BUSY` at accept (not enqueued).
 - **Job succeeded or stopped**: HTTP `200`, `success: true`, `data.status` is `completed` or `stopped`; optional `result` in `data`.
 
 Do not treat HTTP 200 + `success: false` on job poll as a transport error — it means the job finished with a failure.

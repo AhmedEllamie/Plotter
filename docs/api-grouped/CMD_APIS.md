@@ -125,21 +125,29 @@ Send multipart form: `svg`, `copies` (1–100). Poll job status until terminal (
 ## `POST /api/cmd/bulk/stop`
 
 ### Description
-Enqueues a bulk stop command. When the job runs, requests graceful bulk stop (current copy finishes; remaining copies do not start).
+Requests graceful bulk stop. Effect is applied **immediately at accept** (not when the bulk_stop job reaches the front of the FIFO queue).
 
 ### How to use
-Call while bulk is running. Poll the bulk print job id for G-code completion; poll the bulk_stop job id for stop acceptance.
+Call while bulk is running or when a bulk job is pending. Poll the bulk print `jobId` for G-code completion; poll the bulk_stop `jobId` for acceptance record.
 
 ### What it takes
-- No body required.
+- Optional JSON body: `{ "targetJobId": "<bulk-job-uuid>" }`.
+- Omit `targetJobId` → stop first bulk (running bulk first, else first pending bulk).
 - Requires header: `X-API-Key`.
+
+### Behavior
+- **Running bulk:** graceful stop after current copy (e.g. 5/10 → finish copy 5, skip 6–10).
+- **Pending bulk:** cancelled immediately, removed from pending queue.
+- **Single print running:** unaffected.
+- **No bulk target:** HTTP 409 + `PRINTER_NOT_BUSY`.
 
 ### Response
 - **200**: `jobId`, `jobType` (`bulk_stop`), `status`, `queuePosition`
 
 ### Error codes
 - `PRINTER_STATE_ERROR` (409) — not connected
-- Job may finish with `status: failed` and top-level `PRINTER_NOT_BUSY` if no bulk is active when executed
+- `PRINTER_NOT_BUSY` (409) — no matching bulk at accept
+- `PRINT_VALIDATION_ERROR` (400) — invalid `targetJobId`
 
 ## `POST /api/cmd/void`
 

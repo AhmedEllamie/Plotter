@@ -61,7 +61,7 @@ class IPrinterService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def bulk_print(self, gcode: list[str], copies: int) -> PrintResponse:
+    async def bulk_print(self, gcode: list[str], copies: int, *, request_graceful_stop: bool = False) -> PrintResponse:
         raise NotImplementedError
 
     @abstractmethod

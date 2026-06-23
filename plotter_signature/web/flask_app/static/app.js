@@ -517,10 +517,21 @@ async function bulkPrintUploadedSvg() {
   }
 }
 
+function findBulkStopTargetJobId() {
+  for (const job of state.trackedJobs.values()) {
+    if (job.jobType === "bulk" && !isTerminalJobStatus(job.status)) {
+      return job.jobId;
+    }
+  }
+  return null;
+}
+
 async function stopBulkPrint() {
   state.bulkStopRequested = true;
   try {
-    const data = await apiPostJson("/api/cmd/bulk/stop");
+    const targetJobId = findBulkStopTargetJobId();
+    const body = targetJobId ? { targetJobId } : {};
+    const data = await apiPostJson("/api/cmd/bulk/stop", body);
     logJobAccepted(data, "Bulk stop");
     trackJob(data.jobId, data.jobType || "bulk_stop");
     appendLog("Stop bulk requested.");
