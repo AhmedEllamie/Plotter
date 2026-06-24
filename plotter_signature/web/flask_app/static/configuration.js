@@ -291,9 +291,13 @@ function buildServerUiProfilePayload() {
     ? uiState.lastAppliedQuadPointsPx.map((point) => [Number(point[0]), Number(point[1])])
     : [];
   const computedQuadPointsPx = buildQuadPointsPxFromCapture(capture, { requireQuadPoints: false });
-  const quadPointsPx = Array.isArray(cachedQuadPointsPx) && cachedQuadPointsPx.length === REQUIRED_QUAD_POINTS
-    ? cachedQuadPointsPx
-    : (Array.isArray(computedQuadPointsPx) ? computedQuadPointsPx : []);
+  // Prefer freshly clicked overlay points (like focus/print fields); use last-applied only as fallback.
+  const quadPointsPx =
+    Array.isArray(computedQuadPointsPx) && computedQuadPointsPx.length === REQUIRED_QUAD_POINTS
+      ? computedQuadPointsPx
+      : cachedQuadPointsPx.length === REQUIRED_QUAD_POINTS
+        ? cachedQuadPointsPx
+        : [];
   const printPayload = {
     width: String(print.width || "").trim(),
     height: String(print.height || "").trim(),
