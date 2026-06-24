@@ -351,7 +351,7 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 
 - **Config home** (`GET /api/config/ui-profile` → `printRequestJson.printRequest` → `xPosition` / `yPosition`): fixed reference origin on the paper, set once via `/configuration`.
 - **API placement** (`xPosition` / `yPosition` on this request): **required** per job; offset from home where the signature should be drawn.
-- **Effective plot offset:** `home + api_placement + scaled SVG path coordinates`.
+- **Effective plot offset:** `home + api_placement`; the **center of the SVG drawable content** is placed at that point (scale expands/contracts around that center without moving it).
 
 Example: config home `(50mm, 50mm)`, request `(10mm, 20mm)` → signature origin at `(60mm, 70mm)`.
 

@@ -26,15 +26,16 @@ def convert_to_gcode(svg_stream: BinaryIO, req: PrintRequest) -> list[str]:
     min_x, min_y, svg_width, svg_height = _parse_view_box(root)
     unit_to_mm = _determine_unit_to_mm(root, svg_width, svg_height)
 
-    offset_x = _parse_mm(req.x_position)
-    offset_y = _parse_mm(req.y_position)
-    scale = unit_to_mm * req.scale
-
     polylines: list[list[PointD]] = []
     _extract_paths(root, polylines)
 
     if not polylines:
         return []
+
+    center_x, center_y = _content_center(polylines)
+    offset_x = _parse_mm(req.x_position)
+    offset_y = _parse_mm(req.y_position)
+    total_scale = unit_to_mm * req.scale
 
     gcode: list[str] = []
     pen_is_down = False
@@ -44,23 +45,16 @@ def convert_to_gcode(svg_stream: BinaryIO, req: PrintRequest) -> list[str]:
             continue
 
         for index, pt in enumerate(polyline):
-            x = pt.x - min_x
-            y = pt.y - min_y
-
-            x *= scale
-            y *= scale
-
-            scaled_w = svg_width * scale
-            scaled_h = svg_height * scale
+            x = (pt.x - center_x) * total_scale
+            y = (pt.y - center_y) * total_scale
 
             if req.invert_x:
-                x = scaled_w - x
+                x = -x
             if req.invert_y:
-                y = scaled_h - y
+                y = -y
 
-            cx = scaled_w / 2.0
-            cy = scaled_h / 2.0
-            x, y = _rotate_point(x, y, cx, cy, req.rotation)
+            if req.rotation:
+                x, y = _rotate_point(x, y, 0.0, 0.0, req.rotation)
 
             final_x = offset_x + x
             final_y = offset_y + y
@@ -80,6 +74,17 @@ def convert_to_gcode(svg_stream: BinaryIO, req: PrintRequest) -> list[str]:
         gcode.append("G1 E0.0 F4000")
 
     return gcode
+
+
+def _content_center(polylines: list[list[PointD]]) -> tuple[float, float]:
+    all_points = [pt for polyline in polylines for pt in polyline]
+    if not all_points:
+        return 0.0, 0.0
+    min_x = min(pt.x for pt in all_points)
+    max_x = max(pt.x for pt in all_points)
+    min_y = min(pt.y for pt in all_points)
+    max_y = max(pt.y for pt in all_points)
+    return (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
 
 
 def _load_svg_root(svg_stream: BinaryIO) -> ET.Element:

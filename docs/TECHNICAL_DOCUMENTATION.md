@@ -280,12 +280,11 @@ Bezier and arc flattening are approximated into polylines.
 ### 8.3 Coordinate Transform Pipeline
 
 For each point:
-1. Normalize by viewBox min offsets
-2. Convert SVG units to mm scale factor
-3. Apply `scale`
-4. Apply `invert_x`/`invert_y`
-5. Rotate around center by `rotation`
-6. Apply `x_position`/`y_position` offsets
+1. Translate relative to the **drawable content center** (bounding box center of all paths)
+2. Convert SVG units to mm and apply user `scale` (around content center, so scale does not shift placement)
+3. Apply `invert_x`/`invert_y` as mirroring through the content center
+4. Rotate around the content center by `rotation`
+5. Translate so the content center lands at `x_position`/`y_position` (after home + API composition in Flask CMD print)
 
 ### 8.4 G-code Emission Pattern
 
