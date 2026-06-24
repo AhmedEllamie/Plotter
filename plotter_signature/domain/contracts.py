@@ -97,7 +97,7 @@ class PrintRequest:
     height: str = "297mm"
     x_position: str = "50mm"
     y_position: str = "50mm"
-    scale: int = 1
+    scale: float = 1.0
     rotation: int = 0
     invert_x: bool = False
     invert_y: bool = True
@@ -111,7 +111,7 @@ class PrintRequest:
             height=str(data.get("height", data.get("Height", "297mm"))),
             x_position=str(data.get("xPosition", data.get("XPosition", "50mm"))),
             y_position=str(data.get("yPosition", data.get("YPosition", "50mm"))),
-            scale=int(data.get("scale", data.get("Scale", 1))),
+            scale=float(data.get("scale", data.get("Scale", 1))),
             rotation=int(data.get("rotation", data.get("Rotation", 0))),
             invert_x=parse_bool(data.get("invertX", data.get("InvertX")), default=False),
             invert_y=parse_bool(data.get("invertY", data.get("InvertY")), default=True),

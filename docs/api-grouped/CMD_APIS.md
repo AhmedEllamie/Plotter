@@ -85,12 +85,14 @@ Accepts a print job into the unified async command queue. Does **not** block unt
 
 ### How to use
 1. Ensure system profile has `initialized: true` (Send scanner config on `/configuration`).
-2. Send multipart form with **`svg`** file only. Print settings are read from `ui-profile.json`.
+2. Send multipart form with **`svg`**, required **`xPosition`** and **`yPosition`** (placement offset from config home), and optional **`scale`**.
 3. Poll `GET /api/cmd/jobs/{jobId}` until `status` is `completed`, `failed`, or `stopped`.
 
 ### What it takes
 - Multipart: **`svg`** file part (required).
-- Print settings: server profile only — do **not** send `printRequestJson` or print form fields.
+- Required: **`xPosition`**, **`yPosition`** (mm offset from profile home).
+- Optional: **`scale`** (decimal multiplier `> 0`).
+- Other print settings (rotation, invert, paper): server profile only — do **not** send `printRequestJson` or other print form fields.
 - Requires header: `X-API-Key`.
 
 ### Response
@@ -98,7 +100,8 @@ Accepts a print job into the unified async command queue. Does **not** block unt
 
 ### Error codes
 - `CONFIG_NOT_INITIALIZED` (409) — profile not initialized
-- `PRINT_SETTINGS_NOT_ALLOWED` (400) — print fields in request
+- `PRINT_SETTINGS_NOT_ALLOWED` (400) — disallowed print fields (only x/y/scale allowed per request)
+- `PRINT_VALIDATION_ERROR` (400) — missing xPosition/yPosition or invalid scale
 - `PRINTER_STATE_ERROR` (409) — not connected
 - `SVG_REQUIRED` (400) — missing `svg` file part
 - `EMPTY_SVG` (400)
@@ -110,10 +113,10 @@ Accepts a print job into the unified async command queue. Does **not** block unt
 Accepts a multi-copy bulk job into the async queue. Same accept contract as single print.
 
 ### How to use
-Send multipart form: `svg`, `copies` (1–100). Poll job status until terminal (`completed`, `failed`, or `stopped`). Use `GET /api/cmd/status` for live bulk counts while running.
+Send multipart form: `svg`, required `xPosition` and `yPosition`, optional `scale`, and `copies` (1–100). Poll job status until terminal (`completed`, `failed`, or `stopped`). Use `GET /api/cmd/status` for live bulk counts while running.
 
 ### What it takes
-- Multipart **`svg`** (required), `copies`.
+- Multipart **`svg`** (required), **`copies`**, **`xPosition`**, **`yPosition`**; optional **`scale`**.
 - Requires header: `X-API-Key`.
 
 ### Response

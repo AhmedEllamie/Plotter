@@ -31,7 +31,7 @@ from plotter_signature.infrastructure.security.api_key_auth import (
     get_configured_api_key,
     validate_api_key,
 )
-from plotter_signature.services.printer.svg_converter import convert_to_gcode
+from plotter_signature.services.printer.svg_converter import _parse_mm, convert_to_gcode
 from plotter_signature.web.flask_app.config import ScannerServiceSettings, load_capture_settings, load_scanner_service_settings
 from plotter_signature.web.flask_app.response import api_error, api_job_status, api_success
 from plotter_signature.web.last_api_error import get_last_api_error
@@ -214,6 +214,19 @@ _PRINT_REQUEST_FIELD_KEYS = frozenset(
     }
 )
 
+_PRINT_REQUEST_OVERRIDE_KEYS = frozenset(
+    {
+        "xPosition",
+        "XPosition",
+        "yPosition",
+        "YPosition",
+        "scale",
+        "Scale",
+    }
+)
+
+_PRINT_REQUEST_DISALLOWED_KEYS = _PRINT_REQUEST_FIELD_KEYS - _PRINT_REQUEST_OVERRIDE_KEYS
+
 
 def _is_meaningful_print_value(value: object) -> bool:
     if value is None:
@@ -229,6 +242,39 @@ def _filter_print_request_fields(data: dict[str, Any] | None) -> dict[str, Any]:
     return {key: value for key, value in data.items() if key in _PRINT_REQUEST_FIELD_KEYS}
 
 
+def _filter_print_override_fields(data: dict[str, Any] | None) -> dict[str, Any]:
+    if not data:
+        return {}
+    return {key: value for key, value in data.items() if key in _PRINT_REQUEST_OVERRIDE_KEYS}
+
+
+def _add_mm(home: str, placement: str) -> str:
+    return f"{_parse_mm(home) + _parse_mm(placement):.3f}mm"
+
+
+def _compose_print_request_payload(profile: dict[str, Any], api_overrides: dict[str, Any]) -> dict[str, Any]:
+    """Profile x/y = home origin. API x/y = placement offset from home (required)."""
+    composed = dict(profile)
+    home_x = str(profile.get("xPosition") or profile.get("XPosition") or "0")
+    home_y = str(profile.get("yPosition") or profile.get("YPosition") or "0")
+
+    api_x = api_overrides.get("xPosition", api_overrides.get("XPosition"))
+    api_y = api_overrides.get("yPosition", api_overrides.get("YPosition"))
+    if not _is_meaningful_print_value(api_x):
+        raise ValueError("xPosition is required.")
+    if not _is_meaningful_print_value(api_y):
+        raise ValueError("yPosition is required.")
+
+    composed["xPosition"] = _add_mm(home_x, str(api_x))
+    composed["yPosition"] = _add_mm(home_y, str(api_y))
+
+    if "scale" in api_overrides or "Scale" in api_overrides:
+        scale_value = api_overrides.get("scale", api_overrides.get("Scale"))
+        if _is_meaningful_print_value(scale_value):
+            composed["scale"] = scale_value
+    return composed
+
+
 def _merge_print_request_payload(profile: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     """Request fields override server ui-profile `print` settings; profile fills omitted keys."""
     base = {key: value for key, value in profile.items() if _is_meaningful_print_value(value)}
@@ -236,11 +282,20 @@ def _merge_print_request_payload(profile: dict[str, Any], request: dict[str, Any
     return {**base, **overlay}
 
 
+def _extract_print_override_payload() -> dict[str, Any]:
+    json_payload = _get_json_dict()
+    if json_payload:
+        return _filter_print_override_fields(json_payload)
+    if request.form:
+        return _filter_print_override_fields(request.form.to_dict(flat=True))
+    return {}
+
+
 def _build_print_request(payload: dict[str, Any] | None) -> PrintRequest:
     data = payload or {}
     print_request = PrintRequest.from_dict(data)
-    if print_request.scale < 1:
-        raise ValueError("Scale must be at least 1.")
+    if print_request.scale <= 0:
+        raise ValueError("Scale must be greater than 0.")
     if print_request.rotation < 0 or print_request.rotation > 360:
         raise ValueError("Rotation must be between 0 and 360.")
     if print_request.paper is not None:
@@ -386,19 +441,19 @@ _CAPTURE_BODY_KEYS = frozenset(
 )
 
 
-def _request_contains_print_settings() -> bool:
+def _request_contains_disallowed_print_settings() -> bool:
     json_payload = _get_json_dict()
     if json_payload:
         nested = json_payload.get("printRequest")
         if isinstance(nested, dict) and nested:
             return True
-        if any(key in json_payload for key in _PRINT_REQUEST_FIELD_KEYS):
+        if set(json_payload.keys()) & _PRINT_REQUEST_DISALLOWED_KEYS:
             return True
     if request.form.get("printRequestJson"):
         return True
     if request.form:
         form_keys = set(request.form.keys())
-        if form_keys & _PRINT_REQUEST_FIELD_KEYS:
+        if form_keys & _PRINT_REQUEST_DISALLOWED_KEYS:
             return True
     return False
 
@@ -636,7 +691,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
         return _print_block_from_profile(profile)
 
     def _resolve_print_request_payload() -> dict[str, Any]:
-        return _print_request_from_system_config()
+        profile = _print_request_from_system_config()
+        overrides = _extract_print_override_payload()
+        return _compose_print_request_payload(profile, overrides)
 
     app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -1667,9 +1724,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def print_svg() -> tuple[Response, int]:
         if not _system_config_initialized():
             return _config_not_initialized_error()
-        if _request_contains_print_settings():
+        if _request_contains_disallowed_print_settings():
             return api_error(
-                "Print settings must come from the server configuration file. Remove printRequestJson and print fields from the request.",
+                "Only xPosition, yPosition, and scale may be sent per request; other print settings must come from server configuration.",
                 error_code="PRINT_SETTINGS_NOT_ALLOWED",
                 status_code=400,
             )
@@ -1701,9 +1758,9 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     def bulk_print_svg() -> tuple[Response, int]:
         if not _system_config_initialized():
             return _config_not_initialized_error()
-        if _request_contains_print_settings():
+        if _request_contains_disallowed_print_settings():
             return api_error(
-                "Print settings must come from the server configuration file. Remove printRequestJson and print fields from the request.",
+                "Only xPosition, yPosition, and scale may be sent per request; other print settings must come from server configuration.",
                 error_code="PRINT_SETTINGS_NOT_ALLOWED",
                 status_code=400,
             )

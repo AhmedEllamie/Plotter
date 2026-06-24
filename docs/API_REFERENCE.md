@@ -342,9 +342,20 @@ curl -sS -H "X-API-Key: YOUR_KEY" "http://127.0.0.1:5000/api/cmd/status"
 | ----------- | ------------------ | -------------------------------- | -------------- | ------- | ------------------------------------------------------------------------------------------------------- |
 | Header      | `Content-Type`     | `string`                         | Yes            | —       | Must be `multipart/form-data`.                                                                          |
 | Multipart   | `svg` or `file`    | `file` (bytes)                   | **Yes** one of | —       | SVG file for this request only.                                                                         |
+| Multipart / JSON | `xPosition`   | `string`                         | **Yes**        | —       | Signature placement X offset (mm), measured from config **home** (see below).                           |
+| Multipart / JSON | `yPosition`   | `string`                         | **Yes**        | —       | Signature placement Y offset (mm), measured from config **home**.                                       |
+| Multipart / JSON | `scale`       | `number`                         | No             | profile | Decimal size multiplier for this job; overrides profile `scale` when sent. Must be `> 0`.               |
 
 
-**Print settings:** Taken **only** from the persisted server configuration file (`GET /api/config/ui-profile` → `printRequestJson.printRequest`). Do **not** send `printRequestJson`, flat print form fields, or JSON `printRequest` on this endpoint — the server returns `400` `PRINT_SETTINGS_NOT_ALLOWED`.
+**Coordinate model:**
+
+- **Config home** (`GET /api/config/ui-profile` → `printRequestJson.printRequest` → `xPosition` / `yPosition`): fixed reference origin on the paper, set once via `/configuration`.
+- **API placement** (`xPosition` / `yPosition` on this request): **required** per job; offset from home where the signature should be drawn.
+- **Effective plot offset:** `home + api_placement + scaled SVG path coordinates`.
+
+Example: config home `(50mm, 50mm)`, request `(10mm, 20mm)` → signature origin at `(60mm, 70mm)`.
+
+**Other print settings** (rotation, invert, paper size, etc.) come **only** from the server profile. Do **not** send `printRequestJson`, nested JSON `printRequest`, or other print form fields — the server returns `400` `PRINT_SETTINGS_NOT_ALLOWED`.
 
 **Initialization gate:** Requires `initialized: true` in the profile (set via **Send scanner config** on `/configuration`). Otherwise `409` `CONFIG_NOT_INITIALIZED`.
 
@@ -370,21 +381,24 @@ Poll **`GET /api/cmd/jobs/{jobId}`** until `status` is a terminal value (`comple
 | Code | Legacy token             | HTTP | Description                                  |
 | ---- | ------------------------ | ---- | -------------------------------------------- |
 | 1041 | `CONFIG_NOT_INITIALIZED` | 409  | Profile not initialized (Send scanner config). |
-| 1042 | `PRINT_SETTINGS_NOT_ALLOWED` | 400  | Print fields sent in request body/form.    |
+| 1042 | `PRINT_SETTINGS_NOT_ALLOWED` | 400  | Disallowed print fields (only xPosition, yPosition, scale allowed per request). |
 | 1022 | `PRINTER_STATE_ERROR`    | 409  | Not connected.                               |
 | 1032 | `SVG_REQUIRED`           | 400  | Missing `svg` part.                          |
 | 1008 | `EMPTY_SVG`              | 400  | Zero-length file.                            |
-| 1019 | `PRINT_VALIDATION_ERROR` | 400  | Bad scale/rotation/copies or SVG conversion. |
+| 1019 | `PRINT_VALIDATION_ERROR` | 400  | Missing xPosition/yPosition, bad scale/copies, or SVG conversion. |
 | 1018 | `PRINT_RUNTIME_ERROR`    | 400  | Runtime error in job.                        |
 | 1017 | `PRINT_FAILED`           | 500  | Unexpected failure.                          |
 
 
-**Example request** (SVG only; print settings from server profile)
+**Example request**
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
   -H "X-API-Key: QSCWDVEFBRGN" \
-  -F "svg=@./signature.svg;type=image/svg+xml"
+  -F "svg=@./signature.svg;type=image/svg+xml" \
+  -F "xPosition=10mm" \
+  -F "yPosition=20mm" \
+  -F "scale=0.75"
 ```
 
 **Example response** `200` (job accepted)
@@ -419,12 +433,15 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print" \
 
 ### `POST /api/cmd/print/bulk`
 
-Same `**multipart/form-data**` as single print (**`svg`** / **`file`** only — no print settings in request), plus:
+Same `**multipart/form-data**` as single print, plus **`copies`**. Required per job: **`xPosition`**, **`yPosition`**. Optional: **`scale`** (same home-relative model as single print).
 
 
-| Location         | Name     | Type      | Required | Constraints | Description              |
-| ---------------- | -------- | --------- | -------- | ----------- | ------------------------ |
-| Multipart / JSON | `copies` | `integer` | **Yes**  | `1`–`100`   | Number of sheets/copies. |
+| Location         | Name        | Type      | Required | Constraints | Description              |
+| ---------------- | ----------- | --------- | -------- | ----------- | ------------------------ |
+| Multipart / JSON | `copies`    | `integer` | **Yes**  | `1`–`100`   | Number of sheets/copies. |
+| Multipart / JSON | `xPosition` | `string`  | **Yes**  | mm offset   | Placement from config home. |
+| Multipart / JSON | `yPosition` | `string`  | **Yes**  | mm offset   | Placement from config home. |
+| Multipart / JSON | `scale`     | `number`  | No       | `> 0`       | Per-job scale override.  |
 
 
 `copies` sources (first hit wins in code): JSON body `copies`, form `copies`, query `copies`.
@@ -437,7 +454,10 @@ Same `**multipart/form-data**` as single print (**`svg`** / **`file`** only — 
 curl -sS -X POST "http://127.0.0.1:5000/api/cmd/print/bulk" \
   -H "X-API-Key: QSCWDVEFBRGN" \
   -F "svg=@./signature.svg;type=image/svg+xml" \
-  -F "copies=5"
+  -F "copies=5" \
+  -F "xPosition=10mm" \
+  -F "yPosition=20mm" \
+  -F "scale=0.75"
 ```
 
 **Example response** `200`
@@ -1105,22 +1125,31 @@ Request log listing/detail config APIs were removed. Use `GET /api/config/print-
 
 ## Shared schemas
 
-### PrintRequest fields
+### PrintRequest fields (server profile)
 
-Stored in `printRequestJson.printRequest` in the system profile file. Used by `POST /api/cmd/print` and bulk print when `initialized` is true. Not accepted on print API requests.
-
+Stored in `printRequestJson.printRequest` in the system profile file (`GET /api/config/ui-profile`). Used as defaults for rotation, invert, scale (when omitted on print API), and as the **home origin** for x/y.
 
 | Field        | JSON keys                | Type      | Default   | Validation                                                     |
 | ------------ | ------------------------ | --------- | --------- | -------------------------------------------------------------- |
 | Paper preset | `paper`, `Paper`         | `string   | null`     | `null`                                                         |
 | Width        | `width`, `Width`         | `string`  | `"210mm"` | Replaced when `paper` is set from preset.                      |
 | Height       | `height`, `Height`       | `string`  | `"297mm"` | Replaced when `paper` is set.                                  |
-| X position   | `xPosition`, `XPosition` | `string`  | `"50mm"`  |                                                                |
-| Y position   | `yPosition`, `YPosition` | `string`  | `"50mm"`  |                                                                |
-| Scale        | `scale`, `Scale`         | `integer` | `1`       | Must be ≥ `1`.                                                 |
+| Home X       | `xPosition`, `XPosition` | `string`  | `"50mm"`  | Reference origin (mm); API placement is measured from here.    |
+| Home Y       | `yPosition`, `YPosition` | `string`  | `"50mm"`  | Reference origin (mm).                                         |
+| Scale        | `scale`, `Scale`         | `number`  | `1`       | Must be `> 0`. Default when print API omits `scale`.           |
 | Rotation     | `rotation`, `Rotation`   | `integer` | `0`       | `0`–`360`.                                                     |
 | Invert X     | `invertX`, `InvertX`     | `boolean` | `false`   | Parsed via `parse_bool` (accepts `1`/`true`/`yes` in strings). |
 | Invert Y     | `invertY`, `InvertY`     | `boolean` | `true`    | Same parsing.                                                  |
+
+### Print API placement fields (per request)
+
+Accepted on `POST /api/cmd/print` and `POST /api/cmd/print/bulk` only (not stored in profile):
+
+| Field     | JSON keys                | Type     | Required | Description                                      |
+| --------- | ------------------------ | -------- | -------- | ------------------------------------------------ |
+| Placement X | `xPosition`, `XPosition` | `string` | **Yes**  | Offset from config home (mm).                    |
+| Placement Y | `yPosition`, `YPosition` | `string` | **Yes**  | Offset from config home (mm).                    |
+| Scale     | `scale`, `Scale`         | `number` | No       | Per-job multiplier; overrides profile when sent. |
 
 
 ### PrintResponse (as JSON)

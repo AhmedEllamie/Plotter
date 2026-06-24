@@ -180,8 +180,8 @@ class PrintApprovalService:
         return payload
 
     def _convert_svg_to_gcode(self, svg_stream: BinaryIO, print_settings) -> list[str] | None:
-        if print_settings.scale < 1:
-            raise ValueError("Scale must be at least 1.")
+        if print_settings.scale <= 0:
+            raise ValueError("Scale must be greater than 0.")
         if print_settings.rotation < 0 or print_settings.rotation > 360:
             raise ValueError("Rotation must be between 0 and 360.")
 

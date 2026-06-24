@@ -152,7 +152,7 @@ Defined in `models/contracts.py`.
 Behavior:
 - If `paper` is specified, width/height are overwritten from known paper dimensions.
 - Validation rules across the app:
-  - `scale >= 1`
+  - `scale > 0`
   - `0 <= rotation <= 360`
 
 ### 6.2 Printer Responses/Status

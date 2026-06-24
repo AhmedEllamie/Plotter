@@ -43,8 +43,8 @@ def _build_print_request(raw_json: str) -> PrintRequest:
 
 
 def _convert_svg_for_cli(svg_path: str, request: PrintRequest) -> list[str]:
-    if request.scale < 1:
-        raise ValueError("Scale must be at least 1.")
+    if request.scale <= 0:
+        raise ValueError("Scale must be greater than 0.")
     if request.rotation < 0 or request.rotation > 360:
         raise ValueError("Rotation must be between 0 and 360.")
     if request.paper is not None:

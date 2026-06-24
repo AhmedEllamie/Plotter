@@ -46,7 +46,7 @@ def _print_request_form(
     height: str = Form(default="297mm"),
     x_position: str = Form(default="50mm", alias="xPosition"),
     y_position: str = Form(default="50mm", alias="yPosition"),
-    scale: int = Form(default=1),
+    scale: float = Form(default=1.0),
     rotation: int = Form(default=0),
     invert_x: bool = Form(default=False, alias="invertX"),
     invert_y: bool = Form(default=True, alias="invertY"),
@@ -88,8 +88,8 @@ def _read_upload_to_stream(upload: UploadFile) -> io.BytesIO:
 
 
 def _convert_svg(svg_stream: io.BytesIO, req: PrintRequest) -> list[str]:
-    if req.scale < 1:
-        raise HTTPException(status_code=400, detail="Scale must be at least 1.")
+    if req.scale <= 0:
+        raise HTTPException(status_code=400, detail="Scale must be greater than 0.")
 
     if req.rotation < 0 or req.rotation > 360:
         raise HTTPException(status_code=400, detail="Rotation must be between 0 and 360.")

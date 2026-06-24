@@ -39,16 +39,17 @@
           </label>
         </div>
         <div class="settings-row-pair">
-          <label>X Position
+          <label>Home X
             <input id="xPosition" type="text" value="50mm">
           </label>
-          <label>Y Position
+          <label>Home Y
             <input id="yPosition" type="text" value="50mm">
           </label>
         </div>
+        <p class="muted small-print">Home X/Y is the plotter reference origin saved in server config. Print API requests send placement offsets measured from this home position.</p>
         <div class="settings-row-pair">
           <label>Scale
-            <input id="scale" type="number" value="1" min="1">
+            <input id="scale" type="number" value="1" min="0.01" step="any">
           </label>
           <label>Rotation
             <input id="rotation" type="number" value="0" min="0" max="360">

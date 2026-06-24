@@ -89,7 +89,7 @@ Empty body where noted: use `{}` or no body; if the server requires JSON, prefer
 | GET | `/api/cmd/status` | — | 200 | Public printer status (no `port_name`; includes **`printer_connected`**) |
 | GET | `/api/cmd/jobs/queue` | — | 200 | `{ "active": job or null, "pending": [ … ] }` — slim items: `jobId`, `jobType`, `status`, `queuePosition`, `svgFileName` — **HTTP method must be GET** |
 | GET | `/api/cmd/jobs/{jobId}` | — | 200 | Poll job status — **HTTP method must be GET (POST returns 405)**. Terminal: `completed` / `failed` / `stopped`. Failed jobs: HTTP 200 + `success: false` + envelope `errorCode` |
-| POST | `/api/cmd/print` | `multipart/form-data`: file field **`svg`** or **`file`** (required) only | 200 | Async accept: `jobId`, `jobType`, `status` (`pending`), `queuePosition` — poll until terminal status |
+| POST | `/api/cmd/print` | `multipart/form-data`: **`svg`** or **`file`** (required), **`xPosition`** and **`yPosition`** (required), optional **`scale`** | 200 | Async accept: `jobId`, `jobType`, `status` (`pending`), `queuePosition` — poll until terminal status |
 | POST | `/api/cmd/print/bulk` | Same as print + **`copies`** (1–100) in form, JSON, or query | 200 | Same async accept shape; `jobType` is `bulk` |
 | POST | `/api/cmd/bulk/stop` | JSON `{}` or `{ "targetJobId": "<bulk-uuid>" }` optional | 200 | Immediate stop at accept; async accept: `jobId`, `jobType` (`bulk_stop`), `status`, `queuePosition`. **409** if no bulk to stop. |
 | POST | `/api/cmd/void` | JSON `{}` recommended | 200 | Async accept: `jobId`, `jobType` (`void`), `status`, `queuePosition` |

@@ -5,7 +5,8 @@
 
 ## What It Takes
 - Same as `/api/print` (multipart **svg** or **file**) plus **copies** (JSON/form/query integer 1..100)
-- Print settings come **only** from the server configuration file (see `POST /api/print`).
+- Required per job: **`xPosition`**, **`yPosition`** (placement from config home); optional **`scale`**
+- Other print settings from server profile (see `POST /api/print`)
 - Requires `initialized: true` in the profile.
 
 ## Response
