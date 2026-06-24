@@ -143,15 +143,14 @@ These fields describe the **last recorded failure**, not an error in the status 
 ### Authentication (all `/api/`* routes)
 
 
-| Location    | Name        | Type     | Required                                                     | Description                                                                                                                                                                                                      |
-| ----------- | ----------- | -------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HTTP header | `X-API-Key` | `string` | **Yes** for every `/api/`* route                             | Must match server `PLOTTER_API_KEY` or request returns **401**.                                                                                                                                                  |
-| Query       | `token`     | `string` | Alternative (**only** `GET /api/config/scanner/stream.mjpg`) | Must equal `**PLOTTER_STREAM_TOKEN`** if that env is non-empty, otherwise `**PLOTTER_API_KEY`**. Lets the configuration page use `<img src="...">`, which cannot send headers. **May appear in logs/referrers.** |
+| Location    | Name        | Type     | Required                         | Description                                                   |
+| ----------- | ----------- | -------- | -------------------------------- | ------------------------------------------------------------- |
+| HTTP header | `X-API-Key` | `string` | **Yes** for every `/api/`* route | Must match server `PLOTTER_API_KEY` or request returns **401**. |
 
 
 `**PLOTTER_API_KEY` is mandatory.** Flask `create_app` raises `RuntimeError` and refuses to start if the variable is missing or blank. There is no anonymous / development bypass.
 
-All `/api/`* routes require a matching `**X-API-Key`** header, **except** the scanner stream which may also use the `**token`** query parameter as described above (missing or invalid → **401**).
+All `/api/`* routes require a matching `**X-API-Key`** header (missing or invalid → **401**).
 
 
 | `errorCode` (numeric) | Legacy token   | HTTP | Meaning               |
@@ -195,7 +194,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 
 Expect `**200**`. A wrong or missing key returns `**401**`.
 
-1. **Update every client** — **Configuration → API Key**, kiosk env / `/etc/plotter-signature/plotter-signature.env` (or `PLOTTER_API_KEY_FILE`), and any integrations — so `**X-API-Key`** matches the server. For `**GET /api/config/scanner/stream.mjpg`**, use query `**token`** as documented, or set a separate `**PLOTTER_STREAM_TOKEN**` for the URL while keeping `**PLOTTER_API_KEY**` on normal `**fetch**` calls.
+1. **Update every client** — **Configuration → API Key**, kiosk env / `/etc/plotter-signature/plotter-signature.env` (or `PLOTTER_API_KEY_FILE`), and any integrations — so `**X-API-Key`** matches the server on every `/api/*` call, including the scanner stream.
 
 ### Static HTML (no API key)
 
@@ -668,7 +667,7 @@ curl -sS -X POST "http://127.0.0.1:5000/api/cmd/void" \
 
 ## Group: Config APIs (`/api/config/*`)
 
-Header: `**X-API-Key`**: `string` (required on every route, except the scanner stream may use query `token` as documented).
+Header: `**X-API-Key`**: `string` (required on every route).
 
 ---
 
@@ -944,21 +943,13 @@ Optional: on success, `**data**` may include `**scannerApplyWarning**` (string) 
 
 #### `GET /api/config/scanner/stream.mjpg`
 
-Send `**X-API-Key`** **or** set query `**token`** to `**PLOTTER_API_KEY`** (or to `**PLOTTER_STREAM_TOKEN`** when that env is set). The configuration page adds `**token**` from the saved API key for `<img>` previews. Anonymous viewers are rejected with **401**.
+Requires `**X-API-Key`** on every request. The configuration page fetches the MJPEG stream with that header (browsers cannot attach headers to a plain `<img src="...">`).
 
 **Example request**
 
 ```bash
 curl -sS -H "X-API-Key: QSCWDVEFBRGN" \
   "http://127.0.0.1:5000/api/config/scanner/stream.mjpg?fps=10&width=640&fisheye=1" \
-  --output stream.bin
-```
-
-**Example (stream `token` instead of header)**
-
-```bash
-curl -sS \
-  "http://127.0.0.1:5000/api/config/scanner/stream.mjpg?fisheye=1&token=QSCWDVEFBRGN" \
   --output stream.bin
 ```
 
@@ -1172,7 +1163,7 @@ Public API status omits serial `**port_name**`. The `**GET /api/cmd/status**` re
 
 ## API index (endpoints in this document)
 
-Quick checklist of every HTTP surface **documented above** (method + path). All `/api/`* routes require `**[X-API-Key](#authentication-all-api-routes)`**, except `**GET /api/config/scanner/stream.mjpg`** which may use query `**token**` as documented there.
+Quick checklist of every HTTP surface **documented above** (method + path). All `/api/`* routes require `**[X-API-Key](#authentication-all-api-routes)`**.
 
 ### Static pages (no API key)
 

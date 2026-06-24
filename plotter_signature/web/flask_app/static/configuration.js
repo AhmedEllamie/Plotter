@@ -20,6 +20,8 @@ const uiState = {
   systemInitialized: false,
 };
 const MAX_CONFIG_LOG_LINES = 100;
+let streamAbortController = null;
+let streamFrameObjectUrl = null;
 
 function showConfigMessage(message, isError = false) {
   const node = document.getElementById("configMessage");
@@ -698,27 +700,147 @@ function registerPersistenceListeners() {
 
 function buildStreamUrl() {
   const capture = readCaptureSettingsForm();
-  const conn = readConnectionForm();
   const params = new URLSearchParams();
   params.set("fisheye", capture.streamFisheye ? "1" : "0");
-  if (conn.apiKey) {
-    params.set("token", conn.apiKey);
-  }
   return `/api/config/scanner/stream.mjpg?${params.toString()}`;
+}
+
+function concatUint8Arrays(left, right) {
+  if (!left.length) {
+    return right;
+  }
+  if (!right.length) {
+    return left;
+  }
+  const merged = new Uint8Array(left.length + right.length);
+  merged.set(left, 0);
+  merged.set(right, left.length);
+  return merged;
+}
+
+function indexOfJpegStart(bytes, from = 0) {
+  for (let i = from; i < bytes.length - 1; i += 1) {
+    if (bytes[i] === 0xff && bytes[i + 1] === 0xd8) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function indexOfJpegEnd(bytes, from = 0) {
+  for (let i = from; i < bytes.length - 1; i += 1) {
+    if (bytes[i] === 0xff && bytes[i + 1] === 0xd9) {
+      return i + 2;
+    }
+  }
+  return -1;
+}
+
+function revokeStreamFrameUrl() {
+  if (!streamFrameObjectUrl) {
+    return;
+  }
+  URL.revokeObjectURL(streamFrameObjectUrl);
+  streamFrameObjectUrl = null;
+}
+
+async function runAuthenticatedMjpegStream(url, { signal, onFrame }) {
+  const response = await apiFetch(url, { method: "GET", signal });
+  if (!response.ok) {
+    let message = `Stream failed (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch (_error) {
+      // Stream errors may not be JSON.
+    }
+    throw new Error(message);
+  }
+
+  const reader = response.body.getReader();
+  let buffer = new Uint8Array(0);
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer = concatUint8Arrays(buffer, value);
+
+    let start = indexOfJpegStart(buffer);
+    while (start !== -1) {
+      const end = indexOfJpegEnd(buffer, start + 2);
+      if (end === -1) {
+        break;
+      }
+      onFrame(buffer.slice(start, end));
+      buffer = buffer.slice(end);
+      start = indexOfJpegStart(buffer);
+    }
+
+    if (buffer.length > 2_000_000) {
+      const keepFrom = indexOfJpegStart(buffer, Math.max(0, buffer.length - 1024));
+      buffer = keepFrom === -1 ? new Uint8Array(0) : buffer.slice(keepFrom);
+    }
+  }
 }
 
 function showStreamInline() {
   persistCaptureSettings();
-  const url = buildStreamUrl();
+  const conn = readConnectionForm();
+  if (!conn.apiKey) {
+    showConfigMessage("Configure API key before starting stream.", true);
+    return;
+  }
+
+  stopStreamInline();
   const img = document.getElementById("streamPreview");
   updateStreamPreviewLayout();
-  img.src = `${url}&t=${Date.now()}`;
+  streamAbortController = new AbortController();
+  const { signal } = streamAbortController;
   uiState.streamVisible = true;
-  showConfigMessage("Live stream started.");
-  appendConfigLog("Live stream started.");
+  showConfigMessage("Live stream starting...");
+  appendConfigLog("Live stream starting...");
+
+  void (async () => {
+    try {
+      await runAuthenticatedMjpegStream(buildStreamUrl(), {
+        signal,
+        onFrame: (frameBytes) => {
+          revokeStreamFrameUrl();
+          const blob = new Blob([frameBytes], { type: "image/jpeg" });
+          streamFrameObjectUrl = URL.createObjectURL(blob);
+          img.src = streamFrameObjectUrl;
+        },
+      });
+      if (!signal.aborted) {
+        uiState.streamVisible = false;
+        showConfigMessage("Live stream ended.");
+        appendConfigLog("Live stream ended.");
+      }
+    } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+      uiState.streamVisible = false;
+      const message = error instanceof Error ? error.message : String(error);
+      showConfigMessage(`Live stream failed: ${message}`, true);
+      appendConfigLog(`Live stream failed: ${message}`, true);
+    } finally {
+      if (streamAbortController?.signal === signal) {
+        streamAbortController = null;
+      }
+    }
+  })();
 }
 
 function stopStreamInline() {
+  if (streamAbortController) {
+    streamAbortController.abort();
+    streamAbortController = null;
+  }
+  revokeStreamFrameUrl();
   const img = document.getElementById("streamPreview");
   img.src = "";
   uiState.streamVisible = false;

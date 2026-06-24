@@ -25,8 +25,6 @@ All request URLs below are `{baseUrl}` + path (e.g. `{baseUrl}/api/cmd/health`).
 
 There is no anonymous / development bypass.
 
-**Scanner stream in a browser:** `GET /api/config/scanner/stream.mjpg` also accepts query **`token`** (must match **`PLOTTER_API_KEY`**, or **`PLOTTER_STREAM_TOKEN`** if set) because `<img src="...">` cannot send `X-API-Key`. The configuration page appends **`token`** from the saved API key. In Postman, keep sending **`X-API-Key`** on all requests.
-
 Invalid or missing key → **HTTP 401** and JSON:
 
 ```json
@@ -175,7 +173,7 @@ python -m plotter_signature.cli disconnect
 
 | Method | Path | Params / body | Typical success |
 | ------ | ---- | ------------- | --------------- |
-| GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1); plus header `X-API-Key` **or** query `token` (must match `PLOTTER_STREAM_TOKEN` if set, otherwise `PLOTTER_API_KEY`) | **200** MJPEG stream (binary) |
+| GET | `/api/config/scanner/stream.mjpg` | Query: `fps` (default 10), `width` (default 0), `fisheye` (default 1); header `X-API-Key` required | **200** MJPEG stream (binary) |
 
 Scanner manual config is embedded in `POST /api/config/ui-profile` under the `capture` section. Scanner-related legacy tokens (see numeric codes in [API_REFERENCE.md](API_REFERENCE.md#api-error-code-registry)): `SCANNER_CONFIG_REQUIRED`, `SCANNER_HTTP_ERROR`, `SCANNER_UNREACHABLE`, `SCANNER_CAPTURE_FAILED`, stream: `SCANNER_STREAM_*`.
 

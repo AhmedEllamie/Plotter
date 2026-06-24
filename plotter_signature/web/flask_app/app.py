@@ -29,7 +29,6 @@ from plotter_signature.infrastructure.security.api_key_auth import (
     API_KEY_HEADER,
     API_KEY_REQUIRED_MESSAGE,
     get_configured_api_key,
-    stream_query_token_is_valid,
     validate_api_key,
 )
 from plotter_signature.services.printer.svg_converter import convert_to_gcode
@@ -619,7 +618,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
     _ensure_ui_profile_file(ui_profile_path)
     ui_profile_exists = ui_profile_path.exists()
     ui_profile_data = _load_ui_profile_data(ui_profile_path)
-    _SCANNER_STREAM_PATH = "/api/config/scanner/stream.mjpg"
 
     def _system_config_initialized() -> bool:
         with ui_profile_lock:
@@ -1075,17 +1073,6 @@ def create_app(provider: ServiceProvider | None = None) -> Flask:
             return None
 
         header_api_key = (request.headers.get(API_KEY_HEADER) or "").strip()
-        if request.method == "GET" and request.path.rstrip("/") == _SCANNER_STREAM_PATH.rstrip("/"):
-            if validate_api_key(header_api_key).is_valid:
-                return None
-            if stream_query_token_is_valid(request.args.get("token")):
-                return None
-            return api_error(
-                f"Missing or invalid {API_KEY_HEADER} header or token query parameter.",
-                error_code="UNAUTHORIZED",
-                status_code=401,
-            )
-
         validation = validate_api_key(header_api_key)
         if validation.is_valid:
             return None
